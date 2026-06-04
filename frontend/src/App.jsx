@@ -1,0 +1,128 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { fetchContracts, fetchContract, fetchConflicts, fetchRisks, fetchReviewStatus } from './api';
+import ContractOverview from './components/ContractOverview';
+import ContractTree from './components/ContractTree';
+import ClauseDetail from './components/ClauseDetail';
+
+export default function App() {
+  const [contracts, setContracts] = useState([]);
+  const [selectedContractId, setSelectedContractId] = useState(null);
+  const [contract, setContract] = useState(null);
+  const [conflicts, setConflicts] = useState([]);
+  const [risks, setRisks] = useState([]);
+  const [reviewStatus, setReviewStatus] = useState(null);
+  const [selectedClauseId, setSelectedClauseId] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetchContracts().then(data => {
+      setContracts(data);
+      if (data.length > 0 && !selectedContractId) {
+        setSelectedContractId(data[0].id);
+      }
+    });
+  }, []);
+
+  const loadContractData = useCallback(async (id) => {
+    setLoading(true);
+    try {
+      const [contractData, conflictsData, risksData, statusData] = await Promise.all([
+        fetchContract(id),
+        fetchConflicts(id),
+        fetchRisks(id),
+        fetchReviewStatus(id)
+      ]);
+      setContract(contractData);
+      setConflicts(conflictsData);
+      setRisks(risksData);
+      setReviewStatus(statusData);
+      if (contractData.clauses && contractData.clauses.length > 0 && !selectedClauseId) {
+        setSelectedClauseId(contractData.clauses[0].clause_id);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedClauseId]);
+
+  useEffect(() => {
+    if (selectedContractId) {
+      loadContractData(selectedContractId);
+    }
+  }, [selectedContractId]);
+
+  const handleClauseSelect = (clauseId) => {
+    setSelectedClauseId(clauseId);
+  };
+
+  const handleConflictResolved = () => {
+    if (selectedContractId) {
+      loadContractData(selectedContractId);
+    }
+  };
+
+  const selectedClause = contract?.clauses?.find(c => c.clause_id === selectedClauseId);
+
+  const clauseConflicts = conflicts.filter(
+    c => c.clause_a_id === selectedClauseId || c.clause_b_id === selectedClauseId
+  );
+
+  const clauseRisks = risks.filter(r => r.clause_id === selectedClauseId);
+
+  const getConflictCountForClause = (clauseId) => {
+    return conflicts.filter(c => c.clause_a_id === clauseId || c.clause_b_id === clauseId).length;
+  };
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1>合同条款冲突检测与风险标注</h1>
+        <div className="contract-selector">
+          <label>选择合同: </label>
+          <select
+            value={selectedContractId || ''}
+            onChange={e => setSelectedContractId(parseInt(e.target.value))}
+          >
+            {contracts.map(c => (
+              <option key={c.id} value={c.id}>{c.title}</option>
+            ))}
+          </select>
+        </div>
+      </header>
+
+      {contract && reviewStatus && (
+        <ContractOverview
+          contract={contract}
+          reviewStatus={reviewStatus}
+          risks={risks}
+          conflicts={conflicts}
+        />
+      )}
+
+      <div className="app-body">
+        <div className="left-panel">
+          {contract && (
+            <ContractTree
+              clauses={contract.clauses}
+              selectedClauseId={selectedClauseId}
+              onSelectClause={handleClauseSelect}
+              getConflictCountForClause={getConflictCountForClause}
+            />
+          )}
+        </div>
+        <div className="right-panel">
+          {loading && <div className="loading">加载中...</div>}
+          {!loading && selectedClause && (
+            <ClauseDetail
+              clause={selectedClause}
+              conflicts={clauseConflicts}
+              risks={clauseRisks}
+              allClauses={contract?.clauses || []}
+              contractId={selectedContractId}
+              onConflictResolved={handleConflictResolved}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
