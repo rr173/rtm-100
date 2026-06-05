@@ -12,6 +12,15 @@ const {
   getImpactAnalysis,
   getModifiedClauseImpact
 } = require('./clauseDependency');
+const {
+  createRule,
+  getRules,
+  deleteRule,
+  auditContract,
+  getAuditResults,
+  batchAudit,
+  getComplianceReport
+} = require('./complianceEngine');
 
 const app = express();
 app.use(cors());
@@ -612,6 +621,78 @@ async function startServer() {
 
     const result = getImpactAnalysis(contractId, revision, clauseId);
     res.json(result);
+  });
+
+  app.post('/api/compliance/rules', (req, res) => {
+    try {
+      const rule = createRule(req.body);
+      res.json(rule);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/compliance/rules', (req, res) => {
+    const targetTag = req.query.target_tag;
+    const rules = getRules(targetTag);
+    res.json(rules);
+  });
+
+  app.delete('/api/compliance/rules/:id', (req, res) => {
+    const deleted = deleteRule(req.params.id);
+    if (deleted) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: '规则不存在' });
+    }
+  });
+
+  app.post('/api/compliance/audit', (req, res) => {
+    const { contract_id, revision } = req.body;
+    if (!contract_id) {
+      return res.status(400).json({ error: 'contract_id为必填项' });
+    }
+
+    try {
+      const findings = auditContract(contract_id, revision || 1);
+      res.json(findings);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/compliance/audits/:contractId', (req, res) => {
+    const contractId = parseInt(req.params.contractId);
+    const revision = parseInt(req.query.revision || '1');
+
+    try {
+      const findings = getAuditResults(contractId, revision);
+      res.json(findings);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/compliance/audit/batch', (req, res) => {
+    const { contract_ids } = req.body;
+    if (!Array.isArray(contract_ids) || contract_ids.length === 0) {
+      return res.status(400).json({ error: 'contract_ids为必填数组' });
+    }
+
+    const result = batchAudit(contract_ids);
+    res.json(result);
+  });
+
+  app.get('/api/compliance/report/:contractId', (req, res) => {
+    const contractId = parseInt(req.params.contractId);
+    const revision = parseInt(req.query.revision || '1');
+
+    try {
+      const report = getComplianceReport(contractId, revision);
+      res.json(report);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
   });
 
   const PORT = process.env.PORT || 3001;

@@ -120,6 +120,38 @@ async function initDb() {
     );
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS compliance_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      target_tags TEXT NOT NULL DEFAULT '[]',
+      check_type TEXT NOT NULL CHECK(check_type IN ('contains', 'numeric_range', 'duration_range', 'required_field')),
+      check_params TEXT NOT NULL DEFAULT '{}',
+      severity TEXT NOT NULL CHECK(severity IN ('critical', 'major', 'minor')),
+      suggestion TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS compliance_findings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1,
+      clause_id TEXT,
+      rule_id INTEGER NOT NULL,
+      rule_name TEXT NOT NULL,
+      severity TEXT NOT NULL CHECK(severity IN ('critical', 'major', 'minor')),
+      status TEXT NOT NULL CHECK(status IN ('violation', 'pass')),
+      detail TEXT NOT NULL,
+      suggestion TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+      FOREIGN KEY (rule_id) REFERENCES compliance_rules(id) ON DELETE CASCADE
+    );
+  `);
+
   const conflictCols = db.exec("PRAGMA table_info(detected_conflicts)");
   const hasConflictRevision = conflictCols[0]?.values?.some(row => row[1] === 'revision');
   if (!hasConflictRevision) {

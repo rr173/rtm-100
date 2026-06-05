@@ -1,6 +1,7 @@
 const { initDb, queryAll, queryOne, runSql } = require('./database');
 const { detectConflicts } = require('./conflictDetection');
 const { annotateRisks } = require('./riskAnnotation');
+const { createRule, auditContract } = require('./complianceEngine');
 
 function seed() {
   const existing = queryOne('SELECT COUNT(*) as cnt FROM contracts');
@@ -76,6 +77,63 @@ function seed() {
 
   const annotations = annotateRisks(contractId);
   console.log(`Annotated ${annotations.length} risk items.`);
+
+  const complianceRules = [
+    {
+      name: '保密条款期限要求',
+      description: '保密条款必须包含期限相关关键词',
+      target_tags: ['confidentiality'],
+      check_type: 'contains',
+      check_params: { keywords: ['期限', '年', '个月', '天', '永久', '长期'] },
+      severity: 'major',
+      suggestion: '建议在保密条款中明确保密期限，例如"保密期限为协议终止后2年"'
+    },
+    {
+      name: '责任上限最低要求',
+      description: '责任上限不得低于合同金额的5%',
+      target_tags: ['liability_cap'],
+      check_type: 'numeric_range',
+      check_params: { type: 'percentage', min: 5, max: undefined },
+      severity: 'critical',
+      suggestion: '建议将责任上限提高至合同金额的5%或以上，以合理分配风险'
+    },
+    {
+      name: '付款期限限制',
+      description: '付款期不得超过60天',
+      target_tags: ['payment_term'],
+      check_type: 'duration_range',
+      check_params: { min_days: undefined, max_days: 60 },
+      severity: 'major',
+      suggestion: '建议缩短付款期限至60天以内，或增加逾期付款违约金条款'
+    },
+    {
+      name: '终止条款通知期要求',
+      description: '终止条款必须包含通知期',
+      target_tags: ['termination'],
+      check_type: 'duration_range',
+      check_params: { min_days: 30, max_days: undefined },
+      severity: 'minor',
+      suggestion: '建议设置不少于30天的终止通知期，给予双方充分的准备时间'
+    },
+    {
+      name: '转让限制条款要求',
+      description: '合同必须包含转让限制条款',
+      target_tags: ['transfer_restriction'],
+      check_type: 'required_field',
+      check_params: {},
+      severity: 'minor',
+      suggestion: '建议添加转让限制条款，明确未经对方同意不得转让合同权利义务'
+    }
+  ];
+
+  for (const rule of complianceRules) {
+    createRule(rule);
+  }
+  console.log(`Created ${complianceRules.length} compliance rules.`);
+
+  const findings = auditContract(contractId);
+  const violations = findings.filter(f => f.status === 'violation');
+  console.log(`Audited contract: ${violations.length} compliance violations found.`);
 
   console.log('Demo data seeded successfully.');
 }
