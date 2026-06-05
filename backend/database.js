@@ -95,6 +95,30 @@ async function initDb() {
     );
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS contract_revisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      revision_number INTEGER NOT NULL,
+      clauses_json TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+      UNIQUE(contract_id, revision_number)
+    );
+  `);
+
+  const conflictCols = db.exec("PRAGMA table_info(detected_conflicts)");
+  const hasConflictRevision = conflictCols[0]?.values?.some(row => row[1] === 'revision');
+  if (!hasConflictRevision) {
+    db.run(`ALTER TABLE detected_conflicts ADD COLUMN revision INTEGER DEFAULT 1`);
+  }
+
+  const riskCols = db.exec("PRAGMA table_info(risk_annotations)");
+  const hasRiskRevision = riskCols[0]?.values?.some(row => row[1] === 'revision');
+  if (!hasRiskRevision) {
+    db.run(`ALTER TABLE risk_annotations ADD COLUMN revision INTEGER DEFAULT 1`);
+  }
+
   saveDb();
   return db;
 }

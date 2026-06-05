@@ -3,6 +3,7 @@ const cors = require('cors');
 const { initDb, queryAll, queryOne, runSql, saveDb } = require('./database');
 const { detectConflicts } = require('./conflictDetection');
 const { annotateRisks, getClauseRiskLevel } = require('./riskAnnotation');
+const { compareRevisions } = require('./textDiff');
 const { seed } = require('./seed');
 
 const app = express();
@@ -199,6 +200,217 @@ async function startServer() {
     );
     const row = queryOne('SELECT last_insert_rowid() as id');
     res.json({ id: row.id, trigger_tags, condition, level, description });
+  });
+
+  app.post('/api/contracts/:id/revisions', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const { clauses } = req.body;
+
+    const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractId]);
+    if (!contract) return res.status(404).json({ error: '合同不存在' });
+
+    if (!Array.isArray(clauses) || clauses.length === 0) {
+      return res.status(400).json({ error: 'clauses为必填项' });
+    }
+
+    const maxRevision = queryOne(
+      'SELECT MAX(revision_number) as max_rev FROM contract_revisions WHERE contract_id = ?',
+      [contractId]
+    );
+    const nextRevision = (maxRevision?.max_rev || 0) + 1;
+
+    if (nextRevision === 1) {
+      const currentClauses = queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
+      const clausesForJson = currentClauses.map(c => ({
+        clause_id: c.clause_id,
+        section: c.section,
+        title: c.title,
+        body: c.body,
+        tags: JSON.parse(c.tags)
+      }));
+      runSql(
+        'INSERT INTO contract_revisions (contract_id, revision_number, clauses_json) VALUES (?, ?, ?)',
+        [contractId, 1, JSON.stringify(clausesForJson)]
+      );
+    }
+
+    const clausesForStorage = clauses.map(c => ({
+      clause_id: c.id || c.clause_id,
+      section: c.section || 'default',
+      title: c.title,
+      body: c.body,
+      tags: c.tags || []
+    }));
+
+    runSql(
+      'INSERT INTO contract_revisions (contract_id, revision_number, clauses_json) VALUES (?, ?, ?)',
+      [contractId, nextRevision + 1, JSON.stringify(clausesForStorage)]
+    );
+
+    const clausesForDetection = clausesForStorage.map(c => ({
+      clause_id: c.clause_id,
+      section: c.section,
+      title: c.title,
+      body: c.body,
+      tags: JSON.stringify(c.tags)
+    }));
+
+    const conflicts = detectConflicts(contractId, nextRevision + 1, clausesForDetection);
+    const annotations = annotateRisks(contractId, nextRevision + 1, clausesForDetection);
+
+    res.json({
+      contract_id: contractId,
+      revision_number: nextRevision + 1,
+      conflicts_detected: conflicts.length,
+      risks_annotated: annotations.length
+    });
+  });
+
+  app.get('/api/contracts/:id/revisions', (req, res) => {
+    const contractId = parseInt(req.params.id);
+
+    const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractId]);
+    if (!contract) return res.status(404).json({ error: '合同不存在' });
+
+    const revisions = queryAll(
+      `SELECT revision_number, created_at, clauses_json 
+       FROM contract_revisions 
+       WHERE contract_id = ? 
+       ORDER BY revision_number ASC`,
+      [contractId]
+    );
+
+    if (revisions.length === 0) {
+      const currentClauses = queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
+      const clausesForJson = currentClauses.map(c => ({
+        clause_id: c.clause_id,
+        section: c.section,
+        title: c.title,
+        body: c.body,
+        tags: JSON.parse(c.tags)
+      }));
+      runSql(
+        'INSERT INTO contract_revisions (contract_id, revision_number, clauses_json, created_at) VALUES (?, ?, ?, ?)',
+        [contractId, 1, JSON.stringify(clausesForJson), contract.created_at]
+      );
+      res.json([{
+        revision_number: 1,
+        created_at: contract.created_at,
+        changed_clauses_count: 0
+      }]);
+      return;
+    }
+
+    const result = [];
+    for (let i = 0; i < revisions.length; i++) {
+      const rev = revisions[i];
+      let changedCount = 0;
+
+      if (i > 0) {
+        const prevClauses = JSON.parse(revisions[i - 1].clauses_json);
+        const currClauses = JSON.parse(rev.clauses_json);
+        const comparison = compareRevisions(prevClauses, currClauses);
+        changedCount = comparison.summary.added + comparison.summary.deleted + comparison.summary.modified;
+      }
+
+      result.push({
+        revision_number: rev.revision_number,
+        created_at: rev.created_at,
+        changed_clauses_count: changedCount
+      });
+    }
+
+    res.json(result);
+  });
+
+  app.get('/api/contracts/:id/revisions/:rev', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const revision = parseInt(req.params.rev);
+
+    const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractId]);
+    if (!contract) return res.status(404).json({ error: '合同不存在' });
+
+    const revisionData = queryOne(
+      'SELECT * FROM contract_revisions WHERE contract_id = ? AND revision_number = ?',
+      [contractId, revision]
+    );
+
+    if (!revisionData) return res.status(404).json({ error: '版本不存在' });
+
+    const clauses = JSON.parse(revisionData.clauses_json);
+
+    const clausesWithRisk = clauses.map(c => ({
+      ...c,
+      risk_level: getClauseRiskLevel(contractId, c.clause_id, revision)
+    }));
+
+    res.json({
+      id: contract.id,
+      title: contract.title,
+      parties: JSON.parse(contract.parties),
+      created_at: contract.created_at,
+      revision_number: revision,
+      clauses: clausesWithRisk
+    });
+  });
+
+  app.get('/api/contracts/:id/diff', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const fromRev = parseInt(req.query.from || '1');
+    const toRev = parseInt(req.query.to || '2');
+
+    const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractId]);
+    if (!contract) return res.status(404).json({ error: '合同不存在' });
+
+    if (fromRev >= toRev) {
+      return res.status(400).json({ error: 'from版本必须小于to版本' });
+    }
+
+    const fromData = queryOne(
+      'SELECT clauses_json FROM contract_revisions WHERE contract_id = ? AND revision_number = ?',
+      [contractId, fromRev]
+    );
+    const toData = queryOne(
+      'SELECT clauses_json FROM contract_revisions WHERE contract_id = ? AND revision_number = ?',
+      [contractId, toRev]
+    );
+
+    if (!fromData || !toData) {
+      return res.status(404).json({ error: '指定的版本不存在' });
+    }
+
+    const fromClauses = JSON.parse(fromData.clauses_json);
+    const toClauses = JSON.parse(toData.clauses_json);
+
+    const comparison = compareRevisions(fromClauses, toClauses);
+
+    const fromRisks = queryAll(
+      'SELECT level, COUNT(*) as count FROM risk_annotations WHERE contract_id = ? AND revision = ? GROUP BY level',
+      [contractId, fromRev]
+    );
+    const toRisks = queryAll(
+      'SELECT level, COUNT(*) as count FROM risk_annotations WHERE contract_id = ? AND revision = ? GROUP BY level',
+      [contractId, toRev]
+    );
+
+    const riskMapFrom = {};
+    const riskMapTo = {};
+    for (const r of fromRisks) riskMapFrom[r.level] = r.count;
+    for (const r of toRisks) riskMapTo[r.level] = r.count;
+
+    const riskChanges = {
+      high: (riskMapTo.high || 0) - (riskMapFrom.high || 0),
+      medium: (riskMapTo.medium || 0) - (riskMapFrom.medium || 0),
+      low: (riskMapTo.low || 0) - (riskMapFrom.low || 0)
+    };
+
+    res.json({
+      from_revision: fromRev,
+      to_revision: toRev,
+      comparisons: comparison.comparisons,
+      summary: comparison.summary,
+      risk_changes: riskChanges
+    });
   });
 
   const PORT = process.env.PORT || 3001;

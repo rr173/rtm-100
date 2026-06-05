@@ -149,8 +149,8 @@ function buildConflictReason(clauseA, clauseB, rule, conflictType) {
   return `条款"${clauseA.title}"(标签: ${tagsA.join(',')})与条款"${clauseB.title}"(标签: ${tagsB.join(',')})在"${rule.tag_a}"与"${rule.tag_b}"上存在潜在重叠,建议审阅。`;
 }
 
-function detectConflicts(contractId) {
-  const clauses = queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
+function detectConflicts(contractId, revision = 1, clausesInput = null) {
+  const clauses = clausesInput || queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
   const conflictRules = queryAll('SELECT * FROM conflict_rules');
 
   const conflicts = [];
@@ -247,16 +247,16 @@ function detectConflicts(contractId) {
     }
   }
 
-  runSql('DELETE FROM detected_conflicts WHERE contract_id = ?', [contractId]);
+  runSql('DELETE FROM detected_conflicts WHERE contract_id = ? AND revision = ?', [contractId, revision]);
 
   const inserted = [];
   for (const c of conflicts) {
     runSql(
-      'INSERT INTO detected_conflicts (contract_id, clause_a_id, clause_b_id, conflict_type, severity, reason) VALUES (?, ?, ?, ?, ?, ?)',
-      [c.contract_id, c.clause_a_id, c.clause_b_id, c.conflict_type, c.severity, c.reason]
+      'INSERT INTO detected_conflicts (contract_id, clause_a_id, clause_b_id, conflict_type, severity, reason, revision) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [c.contract_id, c.clause_a_id, c.clause_b_id, c.conflict_type, c.severity, c.reason, revision]
     );
     const row = queryOne('SELECT last_insert_rowid() as id');
-    inserted.push({ ...c, id: row.id });
+    inserted.push({ ...c, id: row.id, revision });
   }
 
   return inserted;

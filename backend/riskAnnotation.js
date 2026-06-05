@@ -33,11 +33,11 @@ function evaluateCondition(condition, quantities) {
   }
 }
 
-function annotateRisks(contractId) {
-  const clauses = queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
+function annotateRisks(contractId, revision = 1, clausesInput = null) {
+  const clauses = clausesInput || queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
   const riskRules = queryAll('SELECT * FROM risk_rules');
 
-  runSql('DELETE FROM risk_annotations WHERE contract_id = ?', [contractId]);
+  runSql('DELETE FROM risk_annotations WHERE contract_id = ? AND revision = ?', [contractId, revision]);
 
   const annotations = [];
 
@@ -57,8 +57,8 @@ function annotateRisks(contractId) {
         const reason = `条款"${clause.title}"匹配规则"${rule.description}",条件"${rule.condition}"满足,风险等级: ${rule.level}`;
 
         runSql(
-          'INSERT INTO risk_annotations (contract_id, clause_id, rule_id, level, trigger_reason) VALUES (?, ?, ?, ?, ?)',
-          [contractId, clause.clause_id, rule.id, rule.level, reason]
+          'INSERT INTO risk_annotations (contract_id, clause_id, rule_id, level, trigger_reason, revision) VALUES (?, ?, ?, ?, ?, ?)',
+          [contractId, clause.clause_id, rule.id, rule.level, reason, revision]
         );
 
         const row = queryOne('SELECT last_insert_rowid() as id');
@@ -69,7 +69,8 @@ function annotateRisks(contractId) {
           clause_id: clause.clause_id,
           rule_id: rule.id,
           level: rule.level,
-          trigger_reason: reason
+          trigger_reason: reason,
+          revision
         });
       }
     }
@@ -78,10 +79,10 @@ function annotateRisks(contractId) {
   return annotations;
 }
 
-function getClauseRiskLevel(contractId, clauseId) {
+function getClauseRiskLevel(contractId, clauseId, revision = 1) {
   const annotations = queryAll(
-    'SELECT level FROM risk_annotations WHERE contract_id = ? AND clause_id = ?',
-    [contractId, clauseId]
+    'SELECT level FROM risk_annotations WHERE contract_id = ? AND clause_id = ? AND revision = ?',
+    [contractId, clauseId, revision]
   );
 
   if (annotations.length === 0) return null;

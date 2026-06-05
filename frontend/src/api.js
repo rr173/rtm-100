@@ -70,3 +70,27 @@ export async function createRiskRule(rule) {
   });
   return res.json();
 }
+
+export async function fetchRevisions(contractId) {
+  const res = await fetch(`${API_BASE}/contracts/${contractId}/revisions`);
+  return res.json();
+}
+
+export async function uploadRevision(contractId, clauses) {
+  const res = await fetch(`${API_BASE}/contracts/${contractId}/revisions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clauses })
+  });
+  return res.json();
+}
+
+export async function fetchRevision(contractId, revision) {
+  const res = await fetch(`${API_BASE}/contracts/${contractId}/revisions/${revision}`);
+  return res.json();
+}
+
+export async function fetchDiff(contractId, fromRev, toRev) {
+  const res = await fetch(`${API_BASE}/contracts/${contractId}/diff?from=${fromRev}&to=${toRev}`);
+  return res.json();
+}
