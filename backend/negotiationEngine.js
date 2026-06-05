@@ -6,7 +6,7 @@ const STRATEGY_COEFFICIENTS = {
   conservative: 0.5
 };
 
-const DIRECTION_CONFIG = {
+const PREFERENCE_DIRECTION = {
   amount: { partyA: 'higher', partyB: 'lower' },
   percentage: { partyA: 'higher', partyB: 'lower' },
   duration: { partyA: 'higher', partyB: 'lower' }
@@ -70,6 +70,14 @@ function getPositions(contractId) {
   return result;
 }
 
+function getAcceptableRange(bottomLine, ideal, preference) {
+  if (preference === 'higher') {
+    return { min: bottomLine, max: Infinity };
+  } else {
+    return { min: -Infinity, max: bottomLine };
+  }
+}
+
 function calculateNegotiationSpace(contractId) {
   const positions = getPositions(contractId);
   const result = [];
@@ -118,45 +126,18 @@ function calculateNegotiationSpace(contractId) {
 }
 
 function analyzeSpace(partyA, partyB, aspect) {
-  const aBottom = partyA.bottom_line;
-  const aIdeal = partyA.ideal;
-  const bBottom = partyB.bottom_line;
-  const bIdeal = partyB.ideal;
+  const direction = PREFERENCE_DIRECTION[aspect] || PREFERENCE_DIRECTION.amount;
 
-  const direction = DIRECTION_CONFIG[aspect] || DIRECTION_CONFIG.amount;
-  let overlap = false;
+  const aRange = getAcceptableRange(partyA.bottom_line, partyA.ideal, direction.partyA);
+  const bRange = getAcceptableRange(partyB.bottom_line, partyB.ideal, direction.partyB);
+
+  const overlapMin = Math.max(aRange.min, bRange.min);
+  const overlapMax = Math.min(aRange.max, bRange.max);
+  const overlap = overlapMin <= overlapMax;
+
   let gap = 0;
-
-  if (direction.partyA === 'higher') {
-    const aAcceptableMin = Math.min(aBottom, aIdeal);
-    const aAcceptableMax = Math.max(aBottom, aIdeal);
-    const bAcceptableMin = Math.min(bBottom, bIdeal);
-    const bAcceptableMax = Math.max(bBottom, bIdeal);
-
-    overlap = aAcceptableMin <= bAcceptableMax && bAcceptableMin <= aAcceptableMax;
-
-    if (!overlap) {
-      if (aAcceptableMax < bAcceptableMin) {
-        gap = bAcceptableMin - aAcceptableMax;
-      } else {
-        gap = aAcceptableMin - bAcceptableMax;
-      }
-    }
-  } else {
-    const aAcceptableMin = Math.min(aBottom, aIdeal);
-    const aAcceptableMax = Math.max(aBottom, aIdeal);
-    const bAcceptableMin = Math.min(bBottom, bIdeal);
-    const bAcceptableMax = Math.max(bBottom, bIdeal);
-
-    overlap = aAcceptableMin <= bAcceptableMax && bAcceptableMin <= aAcceptableMax;
-
-    if (!overlap) {
-      if (aAcceptableMax < bAcceptableMin) {
-        gap = bAcceptableMin - aAcceptableMax;
-      } else {
-        gap = aAcceptableMin - bAcceptableMax;
-      }
-    }
+  if (!overlap) {
+    gap = Math.abs(overlapMax - overlapMin);
   }
 
   const totalWeight = partyA.weight + partyB.weight;
@@ -164,14 +145,27 @@ function analyzeSpace(partyA, partyB, aspect) {
   let difficulty;
 
   if (overlap) {
-    difficulty = 'easy';
+    const overlapSize = Math.min(
+      overlapMax === Infinity ? Math.abs(partyA.bottom_line - partyB.bottom_line) * 2 : overlapMax - overlapMin,
+      1000000
+    );
+    const totalRange = Math.abs(partyA.bottom_line) + Math.abs(partyB.bottom_line) + 1;
+    const overlapRatio = overlapSize / totalRange;
+
+    if (overlapRatio > 0.3 && avgWeight < 6) {
+      difficulty = 'easy';
+    } else if (overlapRatio > 0.1) {
+      difficulty = 'medium';
+    } else {
+      difficulty = 'hard';
+    }
   } else {
-    const gapRatio = Math.abs(gap) / (Math.abs(aBottom) + Math.abs(bBottom)) * 2;
+    const gapRatio = gap / (Math.abs(partyA.bottom_line) + Math.abs(partyB.bottom_line) + 1);
     if (gapRatio < 0.1 && avgWeight < 5) {
       difficulty = 'easy';
     } else if (gapRatio < 0.3 && avgWeight < 7) {
       difficulty = 'medium';
-    } else if (gapRatio < 0.5) {
+    } else if (gapRatio < 0.6) {
       difficulty = 'hard';
     } else {
       difficulty = 'deadlock';
@@ -181,12 +175,19 @@ function analyzeSpace(partyA, partyB, aspect) {
   return { overlap, gap, difficulty };
 }
 
+function moveTowardsBottom(current, bottomLine, preference, concession) {
+  if (preference === 'higher') {
+    return Math.max(current - concession, bottomLine);
+  } else {
+    return Math.min(current + concession, bottomLine);
+  }
+}
+
 function simulateNegotiation(contractId, maxRounds = 5, strategy = 'balanced') {
   const spaces = calculateNegotiationSpace(contractId);
   const coefficient = STRATEGY_COEFFICIENTS[strategy] || STRATEGY_COEFFICIENTS.balanced;
 
   const rounds = [];
-  const settledClauses = new Set();
   const clauseStates = {};
 
   for (const space of spaces) {
@@ -197,6 +198,8 @@ function simulateNegotiation(contractId, maxRounds = 5, strategy = 'balanced') {
       party_b_current: space.party_b.ideal,
       party_a_bottom: space.party_a.bottom_line,
       party_b_bottom: space.party_b.bottom_line,
+      party_a_ideal: space.party_a.ideal,
+      party_b_ideal: space.party_b.ideal,
       party_a_weight: space.party_a.weight,
       party_b_weight: space.party_b.weight,
       settled: false,
@@ -213,39 +216,27 @@ function simulateNegotiation(contractId, maxRounds = 5, strategy = 'balanced') {
       const state = clauseStates[key];
       if (state.settled) continue;
 
-      const direction = DIRECTION_CONFIG[state.aspect] || DIRECTION_CONFIG.amount;
+      const direction = PREFERENCE_DIRECTION[state.aspect] || PREFERENCE_DIRECTION.amount;
 
-      const aRange = Math.abs(state.party_a_bottom - state.party_a_current);
-      const bRange = Math.abs(state.party_b_bottom - state.party_b_current);
+      const aTotalRange = Math.abs(state.party_a_ideal - state.party_a_bottom);
+      const bTotalRange = Math.abs(state.party_b_ideal - state.party_b_bottom);
 
-      const aConcession = (aRange * coefficient) / round;
-      const bConcession = (bRange * coefficient) / round;
+      const aConcession = (aTotalRange * coefficient) / round;
+      const bConcession = (bTotalRange * coefficient) / round;
 
-      if (direction.partyA === 'higher') {
-        if (state.party_a_bottom > state.party_a_current) {
-          state.party_a_current = Math.min(state.party_a_current + aConcession, state.party_a_bottom);
-        } else {
-          state.party_a_current = Math.max(state.party_a_current - aConcession, state.party_a_bottom);
-        }
+      state.party_a_current = moveTowardsBottom(
+        state.party_a_current,
+        state.party_a_bottom,
+        direction.partyA,
+        aConcession
+      );
 
-        if (state.party_b_bottom > state.party_b_current) {
-          state.party_b_current = Math.min(state.party_b_current + bConcession, state.party_b_bottom);
-        } else {
-          state.party_b_current = Math.max(state.party_b_current - bConcession, state.party_b_bottom);
-        }
-      } else {
-        if (state.party_a_bottom > state.party_a_current) {
-          state.party_a_current = Math.min(state.party_a_current + aConcession, state.party_a_bottom);
-        } else {
-          state.party_a_current = Math.max(state.party_a_current - aConcession, state.party_a_bottom);
-        }
-
-        if (state.party_b_bottom > state.party_b_current) {
-          state.party_b_current = Math.min(state.party_b_current + bConcession, state.party_b_bottom);
-        } else {
-          state.party_b_current = Math.max(state.party_b_current - bConcession, state.party_b_bottom);
-        }
-      }
+      state.party_b_current = moveTowardsBottom(
+        state.party_b_current,
+        state.party_b_bottom,
+        direction.partyB,
+        bConcession
+      );
 
       roundMoves.push({
         clause_id: state.clause_id,
@@ -264,7 +255,6 @@ function simulateNegotiation(contractId, maxRounds = 5, strategy = 'balanced') {
         state.settled_round = round;
         state.agreed_value = (state.party_a_current + state.party_b_current) / 2;
         state.agreed_value = Math.round(state.agreed_value * 100) / 100;
-        settledClauses.add(state.clause_id);
         roundSettled.push(`${state.clause_id}_${state.aspect}`);
       }
     }
@@ -286,9 +276,13 @@ function simulateNegotiation(contractId, maxRounds = 5, strategy = 'balanced') {
 
   for (const key in clauseStates) {
     const state = clauseStates[key];
-    
+
     runSql(
-      `INSERT OR REPLACE INTO negotiation_results 
+      'DELETE FROM negotiation_results WHERE contract_id = ? AND clause_id = ? AND aspect = ?',
+      [contractId, state.clause_id, state.aspect]
+    );
+    runSql(
+      `INSERT INTO negotiation_results 
        (contract_id, clause_id, aspect, status, agreed_value, party_a_final, party_b_final, rounds)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
@@ -329,16 +323,14 @@ function simulateNegotiation(contractId, maxRounds = 5, strategy = 'balanced') {
 function checkSettlement(state, direction) {
   const aCurrent = state.party_a_current;
   const bCurrent = state.party_b_current;
-  const aBottom = state.party_a_bottom;
-  const bBottom = state.party_b_bottom;
 
-  const aAcceptableMin = Math.min(aBottom, state.party_a_current);
-  const aAcceptableMax = Math.max(aBottom, state.party_a_current);
-  const bAcceptableMin = Math.min(bBottom, state.party_b_current);
-  const bAcceptableMax = Math.max(bBottom, state.party_b_current);
+  const aAcceptable = getAcceptableRange(state.party_a_bottom, state.party_a_ideal, direction.partyA);
+  const bAcceptable = getAcceptableRange(state.party_b_bottom, state.party_b_ideal, direction.partyB);
 
-  return aCurrent <= bAcceptableMax && aCurrent >= bAcceptableMin &&
-         bCurrent <= aAcceptableMax && bCurrent >= aAcceptableMin;
+  const aInBRange = aCurrent >= bAcceptable.min && aCurrent <= bAcceptable.max;
+  const bInARange = bCurrent >= aAcceptable.min && bCurrent <= aAcceptable.max;
+
+  return aInBRange && bInARange;
 }
 
 function generateReport(contractId) {
@@ -356,13 +348,17 @@ function generateReport(contractId) {
   const settled = results.filter(r => r.status === 'settled');
   const deadlocked = results.filter(r => r.status === 'deadlock');
 
-  const totalClauses = new Set(results.map(r => r.clause_id)).size;
-  const settledClausesSet = new Set(settled.map(r => r.clause_id));
-  const settledCount = settledClausesSet.size;
-  const deadlockCount = totalClauses - settledCount;
+  const totalClauseAspects = results.length;
+  const settledCount = settled.length;
+  const deadlockCount = deadlocked.length;
 
-  const avgRounds = settled.length > 0 
-    ? settled.reduce((sum, r) => sum + r.rounds, 0) / settled.length 
+  const uniqueClauses = new Set(results.map(r => r.clause_id));
+  const settledClausesSet = new Set(settled.map(r => r.clause_id));
+  const uniqueSettledCount = settledClausesSet.size;
+  const uniqueDeadlockCount = uniqueClauses.size - uniqueSettledCount;
+
+  const avgRounds = settled.length > 0
+    ? settled.reduce((sum, r) => sum + r.rounds, 0) / settled.length
     : 0;
 
   let hardestClause = null;
@@ -413,10 +409,13 @@ function generateReport(contractId) {
   const partyBConcessionPct = bTotalRange > 0 ? Math.round((bTotalConcession / bTotalRange) * 100) : 0;
 
   return {
-    total_clauses_negotiated: totalClauses,
-    settled_count: settledCount,
-    deadlock_count: deadlockCount,
-    settlement_rate: totalClauses > 0 ? Math.round((settledCount / totalClauses) * 100) : 0,
+    total_clauses_negotiated: uniqueClauses.size,
+    total_aspects_negotiated: totalClauseAspects,
+    settled_count: uniqueSettledCount,
+    settled_aspects_count: settledCount,
+    deadlock_count: uniqueDeadlockCount,
+    deadlock_aspects_count: deadlockCount,
+    settlement_rate: totalClauseAspects > 0 ? Math.round((settledCount / totalClauseAspects) * 100) : 0,
     avg_rounds_to_settle: Math.round(avgRounds * 10) / 10,
     hardest_clause: hardestClause,
     concession_summary: {
@@ -437,14 +436,14 @@ function seedNegotiationPositions(contractId) {
   }
 
   const positions = [
-    { party: '甲方', clause_id: 'C05', aspect: 'amount', bottom_line: 10, ideal: 50, weight: 9 },
-    { party: '乙方', clause_id: 'C05', aspect: 'amount', bottom_line: 100, ideal: 20, weight: 8 },
-    { party: '甲方', clause_id: 'C07', aspect: 'duration', bottom_line: 30, ideal: 120, weight: 7 },
-    { party: '乙方', clause_id: 'C07', aspect: 'duration', bottom_line: 180, ideal: 30, weight: 6 },
-    { party: '甲方', clause_id: 'C09', aspect: 'duration', bottom_line: 30, ideal: 365, weight: 5 },
-    { party: '乙方', clause_id: 'C09', aspect: 'duration', bottom_line: 730, ideal: 90, weight: 4 },
-    { party: '甲方', clause_id: 'C11', aspect: 'duration', bottom_line: 7, ideal: 60, weight: 6 },
-    { party: '乙方', clause_id: 'C11', aspect: 'duration', bottom_line: 90, ideal: 15, weight: 7 }
+    { party: '甲方', clause_id: 'C05', aspect: 'amount', bottom_line: 20, ideal: 100, weight: 9 },
+    { party: '乙方', clause_id: 'C05', aspect: 'amount', bottom_line: 80, ideal: 10, weight: 8 },
+    { party: '甲方', clause_id: 'C07', aspect: 'duration', bottom_line: 45, ideal: 120, weight: 7 },
+    { party: '乙方', clause_id: 'C07', aspect: 'duration', bottom_line: 90, ideal: 15, weight: 6 },
+    { party: '甲方', clause_id: 'C09', aspect: 'duration', bottom_line: 365, ideal: 1095, weight: 5 },
+    { party: '乙方', clause_id: 'C09', aspect: 'duration', bottom_line: 730, ideal: 180, weight: 4 },
+    { party: '甲方', clause_id: 'C11', aspect: 'duration', bottom_line: 30, ideal: 90, weight: 6 },
+    { party: '乙方', clause_id: 'C11', aspect: 'duration', bottom_line: 60, ideal: 7, weight: 7 }
   ];
 
   for (const pos of positions) {
