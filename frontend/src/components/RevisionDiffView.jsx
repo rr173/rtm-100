@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 function renderDiffBody(diff, isOld) {
   if (!diff || !diff.sentences) {
@@ -23,12 +23,38 @@ function renderDiffBody(diff, isOld) {
   });
 }
 
+function ImpactBadge({ affectedClauses }) {
+  const [showTooltip, setShowTooltip] = useState(false);
+
+  return (
+    <div 
+      className="impact-badge-wrapper"
+      onMouseEnter={() => setShowTooltip(true)}
+      onMouseLeave={() => setShowTooltip(false)}
+    >
+      <span className="impact-badge">
+        影响 {affectedClauses.length} 个条款
+      </span>
+      {showTooltip && (
+        <div className="impact-tooltip">
+          <div className="impact-tooltip-title">受影响的条款:</div>
+          <div className="impact-tooltip-list">
+            {affectedClauses.map((id, i) => (
+              <span key={i} className="impact-tooltip-item">{id}</span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function RevisionDiffView({ diffData }) {
   if (!diffData) {
     return <div className="loading">加载对比数据中...</div>;
   }
 
-  const { comparisons, summary, risk_changes } = diffData;
+  const { comparisons, summary, risk_changes, affected_clauses_map = {} } = diffData;
 
   const leftClauses = [];
   const rightClauses = [];
@@ -77,6 +103,9 @@ export default function RevisionDiffView({ diffData }) {
                     <span className="diff-clause-id">{item.data.clause_id}</span>
                     {item.data.title}
                     {getStatusBadge(item.status)}
+                    {affected_clauses_map[item.data.clause_id] && (
+                      <ImpactBadge affectedClauses={affected_clauses_map[item.data.clause_id]} />
+                    )}
                   </div>
                   <div className="diff-body">
                     {item.status === 'modified'
@@ -97,6 +126,9 @@ export default function RevisionDiffView({ diffData }) {
                     <span className="diff-clause-id">{item.data.clause_id}</span>
                     {item.data.title}
                     {getStatusBadge(item.status)}
+                    {affected_clauses_map[item.data.clause_id] && (
+                      <ImpactBadge affectedClauses={affected_clauses_map[item.data.clause_id]} />
+                    )}
                   </div>
                   <div className="diff-body">
                     {item.status === 'modified'

@@ -5,6 +5,13 @@ const { detectConflicts } = require('./conflictDetection');
 const { annotateRisks, getClauseRiskLevel } = require('./riskAnnotation');
 const { compareRevisions } = require('./textDiff');
 const { seed } = require('./seed');
+const { 
+  analyzeDependencies, 
+  saveDependencies, 
+  getDependencies, 
+  getImpactAnalysis,
+  getModifiedClauseImpact
+} = require('./clauseDependency');
 
 const app = express();
 app.use(cors());
@@ -220,6 +227,9 @@ async function startServer() {
       [contractId]
     );
     const nextRevision = (maxRevision?.max_rev || 0) + 1;
+    const previousRevision = nextRevision;
+
+    let previousClauses = null;
 
     if (nextRevision === 1) {
       const currentClauses = queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
@@ -234,6 +244,15 @@ async function startServer() {
         'INSERT INTO contract_revisions (contract_id, revision_number, clauses_json) VALUES (?, ?, ?)',
         [contractId, 1, JSON.stringify(clausesForJson)]
       );
+      previousClauses = clausesForJson;
+    } else {
+      const prevData = queryOne(
+        'SELECT clauses_json FROM contract_revisions WHERE contract_id = ? AND revision_number = ?',
+        [contractId, previousRevision]
+      );
+      if (prevData) {
+        previousClauses = JSON.parse(prevData.clauses_json);
+      }
     }
 
     const clausesForStorage = clauses.map(c => ({
@@ -244,9 +263,11 @@ async function startServer() {
       tags: c.tags || []
     }));
 
+    const newRevisionNumber = nextRevision + 1;
+
     runSql(
       'INSERT INTO contract_revisions (contract_id, revision_number, clauses_json) VALUES (?, ?, ?)',
-      [contractId, nextRevision + 1, JSON.stringify(clausesForStorage)]
+      [contractId, newRevisionNumber, JSON.stringify(clausesForStorage)]
     );
 
     const clausesForDetection = clausesForStorage.map(c => ({
@@ -257,14 +278,54 @@ async function startServer() {
       tags: JSON.stringify(c.tags)
     }));
 
-    const conflicts = detectConflicts(contractId, nextRevision + 1, clausesForDetection);
-    const annotations = annotateRisks(contractId, nextRevision + 1, clausesForDetection);
+    const conflicts = detectConflicts(contractId, newRevisionNumber, clausesForDetection);
+    const annotations = annotateRisks(contractId, newRevisionNumber, clausesForDetection);
+
+    const newDeps = analyzeDependencies(contractId, newRevisionNumber, clausesForStorage);
+    saveDependencies(newDeps);
+
+    if (nextRevision === 1) {
+      const currentClauses = queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
+      const clausesForAnalyze = currentClauses.map(c => ({
+        clause_id: c.clause_id,
+        title: c.title,
+        body: c.body
+      }));
+      const prevDeps = analyzeDependencies(contractId, 1, clausesForAnalyze);
+      saveDependencies(prevDeps);
+    }
+
+    let affectedClauses = [];
+    if (previousClauses) {
+      const modifiedClauseIds = [];
+      const newClauseMap = {};
+      for (const c of clausesForStorage) {
+        newClauseMap[c.clause_id] = c;
+      }
+      for (const old of previousClauses) {
+        const newClause = newClauseMap[old.clause_id];
+        if (newClause && newClause.body !== old.body) {
+          modifiedClauseIds.push(old.clause_id);
+        }
+      }
+
+      if (modifiedClauseIds.length > 0) {
+        affectedClauses = getModifiedClauseImpact(
+          contractId,
+          previousRevision,
+          newRevisionNumber,
+          modifiedClauseIds
+        );
+      }
+    }
 
     res.json({
       contract_id: contractId,
-      revision_number: nextRevision + 1,
+      revision_number: newRevisionNumber,
       conflicts_detected: conflicts.length,
-      risks_annotated: annotations.length
+      risks_annotated: annotations.length,
+      dependencies_count: newDeps.length,
+      affected_clauses: affectedClauses
     });
   });
 
@@ -406,13 +467,154 @@ async function startServer() {
       low: (riskMapTo.low || 0) - (riskMapFrom.low || 0)
     };
 
+    const modifiedClauseIds = comparison.comparisons
+      .filter(c => c.status === 'modified')
+      .map(c => c.clause_id);
+
+    const depsFrom = getDependencies(contractId, fromRev);
+    const depsTo = getDependencies(contractId, toRev);
+    
+    const reverseGraph = {};
+    const allDeps = [...depsFrom, ...depsTo];
+    
+    for (const dep of allDeps) {
+      if (!reverseGraph[dep.to_clause_id]) {
+        reverseGraph[dep.to_clause_id] = new Set();
+      }
+      reverseGraph[dep.to_clause_id].add(dep.from_clause_id);
+    }
+
+    const affectedClausesMap = {};
+    const MAX_NODES = 50;
+
+    for (const clauseId of modifiedClauseIds) {
+      const visited = new Set();
+      const queue = [];
+      
+      if (reverseGraph[clauseId]) {
+        for (const neighbor of reverseGraph[clauseId]) {
+          if (!visited.has(neighbor) && visited.size < MAX_NODES) {
+            visited.add(neighbor);
+            queue.push(neighbor);
+          }
+        }
+      }
+      
+      while (queue.length > 0 && visited.size < MAX_NODES) {
+        const id = queue.shift();
+        
+        if (reverseGraph[id]) {
+          for (const neighbor of reverseGraph[id]) {
+            if (!visited.has(neighbor) && visited.size < MAX_NODES) {
+              visited.add(neighbor);
+              queue.push(neighbor);
+            }
+          }
+        }
+      }
+
+      if (visited.size > 0) {
+        affectedClausesMap[clauseId] = Array.from(visited);
+      }
+    }
+
     res.json({
       from_revision: fromRev,
       to_revision: toRev,
       comparisons: comparison.comparisons,
       summary: comparison.summary,
-      risk_changes: riskChanges
+      risk_changes: riskChanges,
+      affected_clauses_map: affectedClausesMap
     });
+  });
+
+  app.post('/api/contracts/:id/analyze-deps', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const revision = parseInt(req.body.revision || '1');
+
+    const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractId]);
+    if (!contract) return res.status(404).json({ error: '合同不存在' });
+
+    let clauses;
+    if (revision === 1) {
+      clauses = queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
+      clauses = clauses.map(c => ({
+        clause_id: c.clause_id,
+        title: c.title,
+        body: c.body
+      }));
+    } else {
+      const revisionData = queryOne(
+        'SELECT clauses_json FROM contract_revisions WHERE contract_id = ? AND revision_number = ?',
+        [contractId, revision]
+      );
+      if (!revisionData) return res.status(404).json({ error: '版本不存在' });
+      clauses = JSON.parse(revisionData.clauses_json);
+    }
+
+    const deps = analyzeDependencies(contractId, revision, clauses);
+    const count = saveDependencies(deps);
+
+    res.json({
+      contract_id: contractId,
+      revision: revision,
+      dependencies_count: count
+    });
+  });
+
+  app.get('/api/contracts/:id/deps', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const revision = parseInt(req.query.revision || '1');
+
+    const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractId]);
+    if (!contract) return res.status(404).json({ error: '合同不存在' });
+
+    let clauses;
+    if (revision === 1) {
+      clauses = queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
+      clauses = clauses.map(c => ({
+        clause_id: c.clause_id,
+        title: c.title
+      }));
+    } else {
+      const revisionData = queryOne(
+        'SELECT clauses_json FROM contract_revisions WHERE contract_id = ? AND revision_number = ?',
+        [contractId, revision]
+      );
+      if (!revisionData) return res.status(404).json({ error: '版本不存在' });
+      const parsed = JSON.parse(revisionData.clauses_json);
+      clauses = parsed.map(c => ({
+        clause_id: c.clause_id,
+        title: c.title
+      }));
+    }
+
+    const deps = getDependencies(contractId, revision);
+
+    res.json({
+      nodes: clauses,
+      edges: deps.map(d => ({
+        from: d.from_clause_id,
+        to: d.to_clause_id,
+        context: d.context
+      }))
+    });
+  });
+
+  app.get('/api/contracts/:id/impact', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const revision = parseInt(req.query.revision || '1');
+    const clauseId = req.query.clause_id;
+
+    const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractId]);
+    if (!contract) return res.status(404).json({ error: '合同不存在' });
+
+    if (!clauseId) {
+      return res.status(400).json({ error: 'clause_id为必填项' });
+    }
+
+    const result = getImpactAnalysis(contractId, revision, clauseId);
+    res.json(result);
   });
 
   const PORT = process.env.PORT || 3001;

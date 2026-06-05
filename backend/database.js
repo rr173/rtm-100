@@ -107,6 +107,19 @@ async function initDb() {
     );
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS contract_deps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1,
+      from_clause_id TEXT NOT NULL,
+      to_clause_id TEXT NOT NULL,
+      context TEXT NOT NULL,
+      FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+      UNIQUE(contract_id, revision, from_clause_id, to_clause_id)
+    );
+  `);
+
   const conflictCols = db.exec("PRAGMA table_info(detected_conflicts)");
   const hasConflictRevision = conflictCols[0]?.values?.some(row => row[1] === 'revision');
   if (!hasConflictRevision) {

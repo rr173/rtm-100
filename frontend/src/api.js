@@ -94,3 +94,22 @@ export async function fetchDiff(contractId, fromRev, toRev) {
   const res = await fetch(`${API_BASE}/contracts/${contractId}/diff?from=${fromRev}&to=${toRev}`);
   return res.json();
 }
+
+export async function analyzeDeps(contractId, revision) {
+  const res = await fetch(`${API_BASE}/contracts/${contractId}/analyze-deps`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ revision })
+  });
+  return res.json();
+}
+
+export async function fetchDeps(contractId, revision) {
+  const res = await fetch(`${API_BASE}/contracts/${contractId}/deps?revision=${revision}`);
+  return res.json();
+}
+
+export async function fetchImpact(contractId, clauseId, revision) {
+  const res = await fetch(`${API_BASE}/contracts/${contractId}/impact?clause_id=${clauseId}&revision=${revision}`);
+  return res.json();
+}

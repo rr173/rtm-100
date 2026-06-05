@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   fetchContracts, fetchContract, fetchConflicts, fetchRisks, fetchReviewStatus,
-  fetchRevisions, uploadRevision, fetchDiff
+  fetchRevisions, uploadRevision, fetchDiff, fetchDeps, analyzeDeps
 } from './api';
 import ContractOverview from './components/ContractOverview';
 import ContractTree from './components/ContractTree';
 import ClauseDetail from './components/ClauseDetail';
 import RevisionDiffView from './components/RevisionDiffView';
 import UploadRevisionModal from './components/UploadRevisionModal';
+import DependencyGraph from './components/DependencyGraph';
 
 export default function App() {
   const [contracts, setContracts] = useState([]);
@@ -25,6 +26,8 @@ export default function App() {
   const [toRevision, setToRevision] = useState(2);
   const [diffData, setDiffData] = useState(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [depsData, setDepsData] = useState(null);
+  const [depsLoading, setDepsLoading] = useState(false);
 
   useEffect(() => {
     fetchContracts().then(data => {
@@ -77,6 +80,23 @@ export default function App() {
       });
     }
   }, [selectedContractId, viewMode, fromRevision, toRevision, revisions.length]);
+
+  const loadDepsData = useCallback(async (contractId, revision = 1) => {
+    setDepsLoading(true);
+    try {
+      await analyzeDeps(contractId, revision);
+      const data = await fetchDeps(contractId, revision);
+      setDepsData(data);
+    } finally {
+      setDepsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedContractId && viewMode === 'graph') {
+      loadDepsData(selectedContractId, 1);
+    }
+  }, [selectedContractId, viewMode, loadDepsData]);
 
   const handleClauseSelect = (clauseId) => {
     setSelectedClauseId(clauseId);
@@ -135,6 +155,12 @@ export default function App() {
               disabled={revisions.length < 2}
             >
               修订对比
+            </button>
+            <button
+              className={`view-btn ${viewMode === 'graph' ? 'active' : ''}`}
+              onClick={() => setViewMode('graph')}
+            >
+              依赖图谱
             </button>
           </div>
           {viewMode === 'diff' && revisions.length >= 2 && (
@@ -217,6 +243,18 @@ export default function App() {
 
       {viewMode === 'diff' && (
         <RevisionDiffView diffData={diffData} />
+      )}
+
+      {viewMode === 'graph' && (
+        <div className="graph-view">
+          {depsLoading && <div className="loading">加载依赖图谱中...</div>}
+          {!depsLoading && (
+            <DependencyGraph
+              depsData={depsData}
+              onNodeClick={handleClauseSelect}
+            />
+          )}
+        </div>
       )}
 
       <UploadRevisionModal
