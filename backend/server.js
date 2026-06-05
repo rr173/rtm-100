@@ -26,7 +26,9 @@ const {
   getPositions,
   calculateNegotiationSpace,
   simulateNegotiation,
-  generateReport
+  generateReport,
+  compareScenarios,
+  recommendStrategy
 } = require('./negotiationEngine');
 
 const app = express();
@@ -768,6 +770,41 @@ async function startServer() {
     const contractId = parseInt(req.params.contractId);
     const report = generateReport(contractId);
     res.json(report);
+  });
+
+  app.post('/api/negotiation/compare', (req, res) => {
+    const { contract_id, scenarios } = req.body;
+
+    if (!contract_id) {
+      return res.status(400).json({ error: 'contract_id为必填项' });
+    }
+    if (!Array.isArray(scenarios) || scenarios.length === 0) {
+      return res.status(400).json({ error: 'scenarios为必填数组' });
+    }
+
+    for (const scenario of scenarios) {
+      if (!scenario.name) {
+        return res.status(400).json({ error: '每个scenario必须包含name' });
+      }
+      if (scenario.max_rounds !== undefined && (!Number.isInteger(scenario.max_rounds) || scenario.max_rounds < 1)) {
+        return res.status(400).json({ error: 'max_rounds必须是正整数' });
+      }
+      if (scenario.strategy !== undefined && !['balanced', 'aggressive', 'conservative'].includes(scenario.strategy)) {
+        return res.status(400).json({ error: 'strategy必须是balanced/aggressive/conservative之一' });
+      }
+      if (scenario.weight_adjustments !== undefined && typeof scenario.weight_adjustments !== 'object') {
+        return res.status(400).json({ error: 'weight_adjustments必须是对象' });
+      }
+    }
+
+    const result = compareScenarios(contract_id, scenarios);
+    res.json(result);
+  });
+
+  app.get('/api/negotiation/recommend/:contractId', (req, res) => {
+    const contractId = parseInt(req.params.contractId);
+    const result = recommendStrategy(contractId);
+    res.json(result);
   });
 
   const PORT = process.env.PORT || 3001;

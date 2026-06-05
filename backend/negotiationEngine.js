@@ -78,7 +78,7 @@ function getAcceptableRange(bottomLine, ideal, preference) {
   }
 }
 
-function calculateNegotiationSpace(contractId) {
+function calculateNegotiationSpace(contractId, weightAdjustments) {
   const positions = getPositions(contractId);
   const result = [];
 
@@ -88,14 +88,20 @@ function calculateNegotiationSpace(contractId) {
     if (!clauseAspectMap[key]) {
       clauseAspectMap[key] = { clause_id: pos.clause_id, aspect: pos.aspect };
     }
-    clauseAspectMap[key].party_a = pos;
+    const adjustedWeight = weightAdjustments && weightAdjustments[pos.clause_id]
+      ? pos.weight * weightAdjustments[pos.clause_id]
+      : pos.weight;
+    clauseAspectMap[key].party_a = { ...pos, weight: adjustedWeight };
   }
   for (const pos of positions.party_b) {
     const key = `${pos.clause_id}_${pos.aspect}`;
     if (!clauseAspectMap[key]) {
       clauseAspectMap[key] = { clause_id: pos.clause_id, aspect: pos.aspect };
     }
-    clauseAspectMap[key].party_b = pos;
+    const adjustedWeight = weightAdjustments && weightAdjustments[pos.clause_id]
+      ? pos.weight * weightAdjustments[pos.clause_id]
+      : pos.weight;
+    clauseAspectMap[key].party_b = { ...pos, weight: adjustedWeight };
   }
 
   for (const key in clauseAspectMap) {
@@ -184,7 +190,54 @@ function moveTowardsBottom(current, bottomLine, preference, concession) {
 }
 
 function simulateNegotiation(contractId, maxRounds = 5, strategy = 'balanced') {
-  const spaces = calculateNegotiationSpace(contractId);
+  const sim = runSimulationInMemory(contractId, maxRounds, strategy);
+  const { clauseStates } = sim;
+
+  for (const key in clauseStates) {
+    const state = clauseStates[key];
+
+    runSql(
+      'DELETE FROM negotiation_results WHERE contract_id = ? AND clause_id = ? AND aspect = ?',
+      [contractId, state.clause_id, state.aspect]
+    );
+    runSql(
+      `INSERT INTO negotiation_results 
+       (contract_id, clause_id, aspect, status, agreed_value, party_a_final, party_b_final, rounds)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        contractId,
+        state.clause_id,
+        state.aspect,
+        state.settled ? 'settled' : 'deadlock',
+        state.agreed_value,
+        Math.round(state.party_a_current * 100) / 100,
+        Math.round(state.party_b_current * 100) / 100,
+        state.settled_round || maxRounds
+      ]
+    );
+  }
+
+  return {
+    rounds: sim.rounds,
+    final_result: sim.final_result
+  };
+}
+
+function checkSettlement(state, direction) {
+  const aCurrent = state.party_a_current;
+  const bCurrent = state.party_b_current;
+
+  const aAcceptable = getAcceptableRange(state.party_a_bottom, state.party_a_ideal, direction.partyA);
+  const bAcceptable = getAcceptableRange(state.party_b_bottom, state.party_b_ideal, direction.partyB);
+
+  const aInBRange = aCurrent >= bAcceptable.min && aCurrent <= bAcceptable.max;
+  const bInARange = bCurrent >= aAcceptable.min && bCurrent <= aAcceptable.max;
+
+  return aInBRange && bInARange;
+}
+
+function runSimulationInMemory(contractId, maxRounds = 5, strategy = 'balanced', weightAdjustments) {
+  const spaces = calculateNegotiationSpace(contractId, weightAdjustments);
   const coefficient = STRATEGY_COEFFICIENTS[strategy] || STRATEGY_COEFFICIENTS.balanced;
 
   const rounds = [];
@@ -276,27 +329,6 @@ function simulateNegotiation(contractId, maxRounds = 5, strategy = 'balanced') {
 
   for (const key in clauseStates) {
     const state = clauseStates[key];
-
-    runSql(
-      'DELETE FROM negotiation_results WHERE contract_id = ? AND clause_id = ? AND aspect = ?',
-      [contractId, state.clause_id, state.aspect]
-    );
-    runSql(
-      `INSERT INTO negotiation_results 
-       (contract_id, clause_id, aspect, status, agreed_value, party_a_final, party_b_final, rounds)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        contractId,
-        state.clause_id,
-        state.aspect,
-        state.settled ? 'settled' : 'deadlock',
-        state.agreed_value,
-        Math.round(state.party_a_current * 100) / 100,
-        Math.round(state.party_b_current * 100) / 100,
-        state.settled_round || maxRounds
-      ]
-    );
-
     if (state.settled) {
       finalResult.settled_clauses.push({
         clause_id: state.clause_id,
@@ -316,21 +348,171 @@ function simulateNegotiation(contractId, maxRounds = 5, strategy = 'balanced') {
 
   return {
     rounds,
-    final_result: finalResult
+    final_result: finalResult,
+    clauseStates
   };
 }
 
-function checkSettlement(state, direction) {
-  const aCurrent = state.party_a_current;
-  const bCurrent = state.party_b_current;
+function calculateSatisfaction(clauseStates, positions, weightAdjustments) {
+  let partyAScore = 0;
+  let partyBScore = 0;
+  let partyATotalWeight = 0;
+  let partyBTotalWeight = 0;
 
-  const aAcceptable = getAcceptableRange(state.party_a_bottom, state.party_a_ideal, direction.partyA);
-  const bAcceptable = getAcceptableRange(state.party_b_bottom, state.party_b_ideal, direction.partyB);
+  const posMapA = {};
+  for (const pos of positions.party_a) {
+    posMapA[`${pos.clause_id}_${pos.aspect}`] = pos;
+    const multiplier = weightAdjustments && weightAdjustments[pos.clause_id] ? weightAdjustments[pos.clause_id] : 1;
+    partyATotalWeight += pos.weight * multiplier;
+  }
+  const posMapB = {};
+  for (const pos of positions.party_b) {
+    posMapB[`${pos.clause_id}_${pos.aspect}`] = pos;
+    const multiplier = weightAdjustments && weightAdjustments[pos.clause_id] ? weightAdjustments[pos.clause_id] : 1;
+    partyBTotalWeight += pos.weight * multiplier;
+  }
 
-  const aInBRange = aCurrent >= bAcceptable.min && aCurrent <= bAcceptable.max;
-  const bInARange = bCurrent >= aAcceptable.min && bCurrent <= aAcceptable.max;
+  for (const key in clauseStates) {
+    const state = clauseStates[key];
+    const posA = posMapA[key];
+    const posB = posMapB[key];
 
-  return aInBRange && bInARange;
+    const multiplierA = weightAdjustments && weightAdjustments[state.clause_id] ? weightAdjustments[state.clause_id] : 1;
+    const multiplierB = weightAdjustments && weightAdjustments[state.clause_id] ? weightAdjustments[state.clause_id] : 1;
+
+    if (state.settled && posA) {
+      const denom = Math.abs(posA.bottom_line - posA.ideal);
+      if (denom > 0 && partyATotalWeight > 0) {
+        const distance = Math.abs(state.agreed_value - posA.ideal);
+        partyAScore += 100 * (1 - distance / denom) * (posA.weight * multiplierA) / partyATotalWeight;
+      }
+    }
+    if (state.settled && posB) {
+      const denom = Math.abs(posB.bottom_line - posB.ideal);
+      if (denom > 0 && partyBTotalWeight > 0) {
+        const distance = Math.abs(state.agreed_value - posB.ideal);
+        partyBScore += 100 * (1 - distance / denom) * (posB.weight * multiplierB) / partyBTotalWeight;
+      }
+    }
+  }
+
+  return {
+    party_a_satisfaction: Math.round(partyAScore * 10) / 10,
+    party_b_satisfaction: Math.round(partyBScore * 10) / 10
+  };
+}
+
+function calculateTotalConcession(clauseStates) {
+  let totalConcession = 0;
+  for (const key in clauseStates) {
+    const state = clauseStates[key];
+    const aConcession = Math.abs(state.party_a_ideal - state.party_a_current);
+    const bConcession = Math.abs(state.party_b_ideal - state.party_b_current);
+    totalConcession += aConcession + bConcession;
+  }
+  return Math.round(totalConcession * 100) / 100;
+}
+
+function findParetoFrontier(solutions) {
+  const frontier = [];
+  for (let i = 0; i < solutions.length; i++) {
+    let dominated = false;
+    for (let j = 0; j < solutions.length; j++) {
+      if (i === j) continue;
+      const a = solutions[i];
+      const b = solutions[j];
+      const bBetterOrEqualRate = b.settlement_rate >= a.settlement_rate;
+      const bBetterOrEqualA = b.party_a_satisfaction >= a.party_a_satisfaction;
+      const bBetterOrEqualB = b.party_b_satisfaction >= a.party_b_satisfaction;
+      const bStrictlyBetter =
+        b.settlement_rate > a.settlement_rate ||
+        b.party_a_satisfaction > a.party_a_satisfaction ||
+        b.party_b_satisfaction > a.party_b_satisfaction;
+      if (bBetterOrEqualRate && bBetterOrEqualA && bBetterOrEqualB && bStrictlyBetter) {
+        dominated = true;
+        break;
+      }
+    }
+    if (!dominated) {
+      frontier.push(solutions[i]);
+    }
+  }
+  return frontier;
+}
+
+function compareScenarios(contractId, scenarios) {
+  const positions = getPositions(contractId);
+  const results = [];
+
+  for (const scenario of scenarios) {
+    const sim = runSimulationInMemory(
+      contractId,
+      scenario.max_rounds || 5,
+      scenario.strategy || 'balanced',
+      scenario.weight_adjustments
+    );
+
+    const settledCount = sim.final_result.settled_clauses.length;
+    const deadlockCount = sim.final_result.deadlocked_clauses.length;
+    const total = settledCount + deadlockCount;
+    const settlementRate = total > 0 ? Math.round((settledCount / total) * 1000) / 10 : 0;
+
+    const satisfaction = calculateSatisfaction(sim.clauseStates, positions, scenario.weight_adjustments);
+    const totalConcession = calculateTotalConcession(sim.clauseStates);
+
+    results.push({
+      name: scenario.name,
+      settled_count: settledCount,
+      deadlock_count: deadlockCount,
+      settlement_rate: settlementRate,
+      party_a_satisfaction: satisfaction.party_a_satisfaction,
+      party_b_satisfaction: satisfaction.party_b_satisfaction,
+      total_concession: totalConcession
+    });
+  }
+
+  return { scenarios: results };
+}
+
+function recommendStrategy(contractId) {
+  const strategies = ['balanced', 'aggressive', 'conservative'];
+  const roundsList = [3, 5, 8];
+  const positions = getPositions(contractId);
+  const solutions = [];
+
+  for (const strategy of strategies) {
+    for (const maxRounds of roundsList) {
+      const sim = runSimulationInMemory(contractId, maxRounds, strategy);
+      const settledCount = sim.final_result.settled_clauses.length;
+      const deadlockCount = sim.final_result.deadlocked_clauses.length;
+      const total = settledCount + deadlockCount;
+      const settlementRate = total > 0 ? Math.round((settledCount / total) * 1000) / 10 : 0;
+      const satisfaction = calculateSatisfaction(sim.clauseStates, positions);
+
+      solutions.push({
+        strategy,
+        max_rounds: maxRounds,
+        settlement_rate: settlementRate,
+        party_a_satisfaction: satisfaction.party_a_satisfaction,
+        party_b_satisfaction: satisfaction.party_b_satisfaction
+      });
+    }
+  }
+
+  const paretoFront = findParetoFrontier(solutions);
+  let recommended = null;
+  let maxRate = -1;
+  for (const sol of paretoFront) {
+    if (sol.settlement_rate > maxRate) {
+      maxRate = sol.settlement_rate;
+      recommended = sol;
+    }
+  }
+
+  return {
+    pareto_front: paretoFront,
+    recommended
+  };
 }
 
 function generateReport(contractId) {
@@ -462,5 +644,7 @@ module.exports = {
   calculateNegotiationSpace,
   simulateNegotiation,
   generateReport,
-  seedNegotiationPositions
+  seedNegotiationPositions,
+  compareScenarios,
+  recommendStrategy
 };
