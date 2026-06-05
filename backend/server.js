@@ -30,6 +30,15 @@ const {
   compareScenarios,
   recommendStrategy
 } = require('./negotiationEngine');
+const {
+  createTemplate,
+  getTemplates,
+  getTemplateById,
+  updateTemplate,
+  deleteTemplate,
+  fillTemplateById,
+  recommendTemplates
+} = require('./templateEngine');
 
 const app = express();
 app.use(cors());
@@ -805,6 +814,134 @@ async function startServer() {
     const contractId = parseInt(req.params.contractId);
     const result = recommendStrategy(contractId);
     res.json(result);
+  });
+
+  app.post('/api/templates', (req, res) => {
+    try {
+      const template = createTemplate(req.body);
+      res.json(template);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/templates', (req, res) => {
+    const category = req.query.category || null;
+    const templates = getTemplates(category);
+    res.json(templates);
+  });
+
+  app.get('/api/templates/recommend', (req, res) => {
+    const existingTags = req.query.existing_tags
+      ? req.query.existing_tags.split(',').filter(t => t.trim() !== '')
+      : [];
+    const recommendations = recommendTemplates(existingTags);
+    res.json(recommendations);
+  });
+
+  app.get('/api/templates/:id', (req, res) => {
+    const template = getTemplateById(req.params.id);
+    if (!template) {
+      return res.status(404).json({ error: '模板不存在' });
+    }
+    res.json(template);
+  });
+
+  app.put('/api/templates/:id', (req, res) => {
+    try {
+      const template = updateTemplate(req.params.id, req.body);
+      if (!template) {
+        return res.status(404).json({ error: '模板不存在' });
+      }
+      res.json(template);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/templates/:id', (req, res) => {
+    const deleted = deleteTemplate(req.params.id);
+    if (deleted) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: '模板不存在' });
+    }
+  });
+
+  app.post('/api/templates/:id/fill', (req, res) => {
+    const { params } = req.body;
+    const result = fillTemplateById(req.params.id, params || {});
+    if (result.error) {
+      return res.status(result.status || 400).json({ error: result.error });
+    }
+    res.json(result);
+  });
+
+  app.post('/api/contracts/generate', (req, res) => {
+    const { title, parties, template_selections } = req.body;
+
+    if (!title || !Array.isArray(template_selections) || template_selections.length === 0) {
+      return res.status(400).json({ error: 'title和template_selections为必填项' });
+    }
+
+    const generatedClauses = [];
+    const allWarnings = [];
+
+    for (const selection of template_selections) {
+      if (!selection.template_id || !selection.clause_id) {
+        return res.status(400).json({ error: '每个template_selection必须包含template_id和clause_id' });
+      }
+
+      const fillResult = fillTemplateById(selection.template_id, selection.params || {});
+      if (fillResult.error) {
+        return res.status(fillResult.status || 400).json({
+          error: `模板填充失败(clause_id=${selection.clause_id}): ${fillResult.error}`
+        });
+      }
+
+      if (fillResult.warnings && fillResult.warnings.length > 0) {
+        for (const w of fillResult.warnings) {
+          allWarnings.push(`[${selection.clause_id}] ${w}`);
+        }
+      }
+
+      generatedClauses.push({
+        id: selection.clause_id,
+        clause_id: selection.clause_id,
+        section: selection.section || 'default',
+        title: selection.title,
+        body: fillResult.filled_body,
+        tags: fillResult.tags
+      });
+    }
+
+    const contractResult = runSql(
+      'INSERT INTO contracts (title, parties) VALUES (?, ?)',
+      [title, JSON.stringify(parties || [])]
+    );
+
+    const contractId = contractResult.lastInsertRowid;
+
+    for (const c of generatedClauses) {
+      runSql(
+        'INSERT INTO clauses (contract_id, clause_id, section, title, body, tags) VALUES (?, ?, ?, ?, ?, ?)',
+        [contractId, c.clause_id, c.section, c.title, c.body, JSON.stringify(c.tags || [])]
+      );
+    }
+
+    const conflicts = detectConflicts(contractId);
+    const annotations = annotateRisks(contractId);
+    const complianceFindings = auditContract(contractId);
+    const complianceViolations = complianceFindings.filter(f => f.status === 'violation');
+
+    res.json({
+      contract_id: contractId,
+      clauses_count: generatedClauses.length,
+      conflicts_detected: conflicts.length,
+      risks_annotated: annotations.length,
+      compliance_violations: complianceViolations.length,
+      warnings: allWarnings
+    });
   });
 
   const PORT = process.env.PORT || 3001;

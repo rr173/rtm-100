@@ -3,15 +3,18 @@ const { detectConflicts } = require('./conflictDetection');
 const { annotateRisks } = require('./riskAnnotation');
 const { createRule, auditContract } = require('./complianceEngine');
 const { seedNegotiationPositions } = require('./negotiationEngine');
+const { seedDemoTemplates } = require('./templateEngine');
 
 function seed() {
+  seedDemoTemplates();
+
   const existing = queryOne('SELECT COUNT(*) as cnt FROM contracts');
   if (existing && existing.cnt > 0) {
-    console.log('Demo data already exists, skipping seed.');
+    console.log('Demo contract data already exists, skipping seed.');
     return;
   }
 
-  console.log('Seeding demo data...');
+  console.log('Seeding demo contract data...');
 
   const conflictRules = [
     { tag_a: 'transfer_restriction', tag_b: 'transfer_permission', condition: 'same_subject' },
