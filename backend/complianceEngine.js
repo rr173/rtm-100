@@ -53,8 +53,13 @@ function getRules(targetTag = null) {
 }
 
 function deleteRule(id) {
-  const result = runSql('DELETE FROM compliance_rules WHERE id = ?', [parseInt(id)]);
-  return result.changes > 0;
+  const ruleId = parseInt(id);
+  const existing = queryOne('SELECT * FROM compliance_rules WHERE id = ?', [ruleId]);
+  if (!existing) {
+    return false;
+  }
+  runSql('DELETE FROM compliance_rules WHERE id = ?', [ruleId]);
+  return true;
 }
 
 function checkContains(text, checkParams) {
@@ -135,7 +140,10 @@ function checkDurationRange(text, checkParams) {
 }
 
 function auditContract(contractId, revision = 1, clausesInput = null) {
-  const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractId]);
+  const contractIdNum = parseInt(contractId);
+  const revisionNum = parseInt(revision);
+
+  const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractIdNum]);
   if (!contract) {
     throw new Error('合同不存在');
   }
@@ -146,13 +154,13 @@ function auditContract(contractId, revision = 1, clausesInput = null) {
       ...c,
       tags: typeof c.tags === 'string' ? JSON.parse(c.tags) : c.tags
     }));
-  } else if (revision === 1) {
-    clauses = queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
+  } else if (revisionNum === 1) {
+    clauses = queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractIdNum]);
     clauses = clauses.map(c => ({ ...c, tags: JSON.parse(c.tags) }));
   } else {
     const revisionData = queryOne(
       'SELECT clauses_json FROM contract_revisions WHERE contract_id = ? AND revision_number = ?',
-      [contractId, revision]
+      [contractIdNum, revisionNum]
     );
     if (!revisionData) {
       throw new Error('版本不存在');
@@ -223,13 +231,13 @@ function auditContract(contractId, revision = 1, clausesInput = null) {
     }
   }
 
-  runSql('DELETE FROM compliance_findings WHERE contract_id = ? AND revision = ?', [contractId, revision]);
+  runSql('DELETE FROM compliance_findings WHERE contract_id = ? AND revision = ?', [contractIdNum, revisionNum]);
 
   const insertedFindings = [];
   for (const f of findings) {
     runSql(
       'INSERT INTO compliance_findings (contract_id, revision, clause_id, rule_id, rule_name, severity, status, detail, suggestion) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [contractId, revision, f.clause_id, f.rule_id, f.rule_name, f.severity, f.status, f.detail, f.suggestion]
+      [contractIdNum, revisionNum, f.clause_id, f.rule_id, f.rule_name, f.severity, f.status, f.detail, f.suggestion]
     );
     const row = queryOne('SELECT last_insert_rowid() as id');
     insertedFindings.push({ ...f, id: row.id });
@@ -239,14 +247,27 @@ function auditContract(contractId, revision = 1, clausesInput = null) {
 }
 
 function getAuditResults(contractId, revision = 1) {
-  const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractId]);
+  const contractIdNum = parseInt(contractId);
+  const revisionNum = parseInt(revision);
+
+  const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractIdNum]);
   if (!contract) {
     throw new Error('合同不存在');
   }
 
+  if (revisionNum > 1) {
+    const revisionData = queryOne(
+      'SELECT * FROM contract_revisions WHERE contract_id = ? AND revision_number = ?',
+      [contractIdNum, revisionNum]
+    );
+    if (!revisionData) {
+      throw new Error('版本不存在');
+    }
+  }
+
   const findings = queryAll(
     'SELECT * FROM compliance_findings WHERE contract_id = ? AND revision = ?',
-    [contractId, revision]
+    [contractIdNum, revisionNum]
   );
 
   return findings;
@@ -294,14 +315,27 @@ function batchAudit(contractIds) {
 }
 
 function getComplianceReport(contractId, revision = 1) {
-  const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractId]);
+  const contractIdNum = parseInt(contractId);
+  const revisionNum = parseInt(revision);
+
+  const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractIdNum]);
   if (!contract) {
     throw new Error('合同不存在');
   }
 
+  if (revisionNum > 1) {
+    const revisionData = queryOne(
+      'SELECT * FROM contract_revisions WHERE contract_id = ? AND revision_number = ?',
+      [contractIdNum, revisionNum]
+    );
+    if (!revisionData) {
+      throw new Error('版本不存在');
+    }
+  }
+
   const findings = queryAll(
     'SELECT * FROM compliance_findings WHERE contract_id = ? AND revision = ?',
-    [contractId, revision]
+    [contractIdNum, revisionNum]
   );
 
   const totalRulesChecked = findings.length;
