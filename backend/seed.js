@@ -2,6 +2,7 @@ const { initDb, queryAll, queryOne, runSql } = require('./database');
 const { detectConflicts } = require('./conflictDetection');
 const { annotateRisks } = require('./riskAnnotation');
 const { createRule, auditContract } = require('./complianceEngine');
+const { seedNegotiationPositions } = require('./negotiationEngine');
 
 function seed() {
   const existing = queryOne('SELECT COUNT(*) as cnt FROM contracts');
@@ -134,6 +135,9 @@ function seed() {
   const findings = auditContract(contractId);
   const violations = findings.filter(f => f.status === 'violation');
   console.log(`Audited contract: ${violations.length} compliance violations found.`);
+
+  seedNegotiationPositions(contractId);
+  console.log('Seeded negotiation positions for C05, C07, C09, C11 clauses.');
 
   console.log('Demo data seeded successfully.');
 }

@@ -21,6 +21,13 @@ const {
   batchAudit,
   getComplianceReport
 } = require('./complianceEngine');
+const {
+  savePositions,
+  getPositions,
+  calculateNegotiationSpace,
+  simulateNegotiation,
+  generateReport
+} = require('./negotiationEngine');
 
 const app = express();
 app.use(cors());
@@ -693,6 +700,74 @@ async function startServer() {
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
+  });
+
+  app.post('/api/negotiation/positions', (req, res) => {
+    const { contract_id, party, positions } = req.body;
+
+    if (!contract_id || !party || !Array.isArray(positions)) {
+      return res.status(400).json({ error: 'contract_id, party, positions为必填项' });
+    }
+
+    if (!['甲方', '乙方'].includes(party)) {
+      return res.status(400).json({ error: 'party必须是"甲方"或"乙方"' });
+    }
+
+    for (const pos of positions) {
+      if (!pos.clause_id || !pos.aspect || pos.bottom_line === undefined || pos.ideal === undefined || pos.weight === undefined) {
+        return res.status(400).json({ error: '每个position必须包含clause_id, aspect, bottom_line, ideal, weight' });
+      }
+      if (!['amount', 'duration', 'percentage'].includes(pos.aspect)) {
+        return res.status(400).json({ error: 'aspect必须是amount/duration/percentage之一' });
+      }
+      if (pos.weight < 1 || pos.weight > 10) {
+        return res.status(400).json({ error: 'weight必须在1-10之间' });
+      }
+    }
+
+    const result = savePositions(contract_id, party, positions);
+    res.json(result);
+  });
+
+  app.get('/api/negotiation/positions/:contractId', (req, res) => {
+    const contractId = parseInt(req.params.contractId);
+    const positions = getPositions(contractId);
+    res.json(positions);
+  });
+
+  app.get('/api/negotiation/space/:contractId', (req, res) => {
+    const contractId = parseInt(req.params.contractId);
+    const space = calculateNegotiationSpace(contractId);
+    res.json(space);
+  });
+
+  app.post('/api/negotiation/simulate', (req, res) => {
+    const { contract_id, max_rounds, strategy } = req.body;
+
+    if (!contract_id) {
+      return res.status(400).json({ error: 'contract_id为必填项' });
+    }
+
+    if (max_rounds !== undefined && (!Number.isInteger(max_rounds) || max_rounds < 1)) {
+      return res.status(400).json({ error: 'max_rounds必须是正整数' });
+    }
+
+    if (strategy !== undefined && !['balanced', 'aggressive', 'conservative'].includes(strategy)) {
+      return res.status(400).json({ error: 'strategy必须是balanced/aggressive/conservative之一' });
+    }
+
+    const result = simulateNegotiation(
+      contract_id,
+      max_rounds || 5,
+      strategy || 'balanced'
+    );
+    res.json(result);
+  });
+
+  app.get('/api/negotiation/report/:contractId', (req, res) => {
+    const contractId = parseInt(req.params.contractId);
+    const report = generateReport(contractId);
+    res.json(report);
   });
 
   const PORT = process.env.PORT || 3001;

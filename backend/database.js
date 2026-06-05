@@ -152,6 +152,39 @@ async function initDb() {
     );
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS negotiation_positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      party TEXT NOT NULL CHECK(party IN ('甲方', '乙方')),
+      clause_id TEXT NOT NULL,
+      aspect TEXT NOT NULL CHECK(aspect IN ('amount', 'duration', 'percentage')),
+      bottom_line REAL NOT NULL,
+      ideal REAL NOT NULL,
+      weight INTEGER NOT NULL CHECK(weight >= 1 AND weight <= 10),
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+      UNIQUE(contract_id, party, clause_id, aspect)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS negotiation_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      clause_id TEXT NOT NULL,
+      aspect TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('settled', 'deadlock')),
+      agreed_value REAL,
+      party_a_final REAL,
+      party_b_final REAL,
+      rounds INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+      UNIQUE(contract_id, clause_id, aspect)
+    );
+  `);
+
   const conflictCols = db.exec("PRAGMA table_info(detected_conflicts)");
   const hasConflictRevision = conflictCols[0]?.values?.some(row => row[1] === 'revision');
   if (!hasConflictRevision) {
