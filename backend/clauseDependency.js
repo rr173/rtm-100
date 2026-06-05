@@ -11,7 +11,18 @@ const CHINESE_NUM_MAP = {
   '七十': 70, '七十一': 71, '七十二': 72, '七十三': 73, '七十四': 74, '七十五': 75, '七十六': 76, '七十七': 77, '七十八': 78, '七十九': 79,
   '八十': 80, '八十一': 81, '八十二': 82, '八十三': 83, '八十四': 84, '八十五': 85, '八十六': 86, '八十七': 87, '八十八': 88, '八十九': 89,
   '九十': 90, '九十一': 91, '九十二': 92, '九十三': 93, '九十四': 94, '九十五': 95, '九十六': 96, '九十七': 97, '九十八': 98, '九十九': 99,
-  '壹': 1, '贰': 2, '叁': 3, '肆': 4, '伍': 5, '陆': 6, '柒': 7, '捌': 8, '玖': 9
+  '壹': 1, '贰': 2, '叁': 3, '肆': 4, '伍': 5, '陆': 6, '柒': 7, '捌': 8, '玖': 9,
+  '拾': 10, '佰': 100,
+  '拾伍': 15, '贰拾': 20, '叁拾': 30, '肆拾': 40, '伍拾': 50, '陆拾': 60, '柒拾': 70, '捌拾': 80, '玖拾': 90,
+  '壹拾': 10, '壹拾壹': 11, '壹拾贰': 12, '壹拾叁': 13, '壹拾肆': 14, '壹拾伍': 15, '壹拾陆': 16, '壹拾柒': 17, '壹拾捌': 18, '壹拾玖': 19,
+  '贰拾壹': 21, '贰拾贰': 22, '贰拾叁': 23, '贰拾肆': 24, '贰拾伍': 25, '贰拾陆': 26, '贰拾柒': 27, '贰拾捌': 28, '贰拾玖': 29,
+  '叁拾壹': 31, '叁拾贰': 32, '叁拾叁': 33, '叁拾肆': 34, '叁拾伍': 35, '叁拾陆': 36, '叁拾柒': 37, '叁拾捌': 38, '叁拾玖': 39,
+  '肆拾壹': 41, '肆拾贰': 42, '肆拾叁': 43, '肆拾肆': 44, '肆拾伍': 45, '肆拾陆': 46, '肆拾柒': 47, '肆拾捌': 48, '肆拾玖': 49,
+  '伍拾壹': 51, '伍拾贰': 52, '伍拾叁': 53, '伍拾肆': 54, '伍拾伍': 55, '伍拾陆': 56, '伍拾柒': 57, '伍拾捌': 58, '伍拾玖': 59,
+  '陆拾壹': 61, '陆拾贰': 62, '陆拾叁': 63, '陆拾肆': 64, '陆拾伍': 65, '陆拾陆': 66, '陆拾柒': 67, '陆拾捌': 68, '陆拾玖': 69,
+  '柒拾壹': 71, '柒拾贰': 72, '柒拾叁': 73, '柒拾肆': 74, '柒拾伍': 75, '柒拾陆': 76, '柒拾柒': 77, '柒拾捌': 78, '柒拾玖': 79,
+  '捌拾壹': 81, '捌拾贰': 82, '捌拾叁': 83, '捌拾肆': 84, '捌拾伍': 85, '捌拾陆': 86, '捌拾柒': 87, '捌拾捌': 88, '捌拾玖': 89,
+  '玖拾壹': 91, '玖拾贰': 92, '玖拾叁': 93, '玖拾肆': 94, '玖拾伍': 95, '玖拾陆': 96, '玖拾柒': 97, '玖拾捌': 98, '玖拾玖': 99
 };
 
 function chineseToNumber(chinese) {
@@ -26,27 +37,41 @@ function chineseToNumber(chinese) {
     return num >= 1 && num <= 99 ? num : null;
   }
   
-  let result = 0;
   let temp = 0;
+  let i = 0;
   
-  for (let i = 0; i < chinese.length; i++) {
+  while (i < chinese.length) {
     const char = chinese[i];
     const charValue = CHINESE_NUM_MAP[char];
     
-    if (charValue === undefined) continue;
+    if (charValue === undefined) {
+      i++;
+      continue;
+    }
     
-    if (char === '十') {
-      temp = temp === 0 ? 10 : temp * 10;
-    } else if (char === '百') {
+    if (char === '十' || char === '拾') {
+      if (temp === 0) {
+        temp = 10;
+      } else {
+        temp = temp * 10;
+      }
+      i++;
+    } else if (char === '百' || char === '佰') {
       temp = temp * 100;
+      i++;
     } else {
-      temp += charValue;
+      const nextChar = chinese[i + 1];
+      if ((nextChar === '十' || nextChar === '拾') && charValue < 10) {
+        temp += charValue * 10;
+        i += 2;
+      } else {
+        temp += charValue;
+        i++;
+      }
     }
   }
   
-  result = temp;
-  
-  return result >= 1 && result <= 99 ? result : null;
+  return temp >= 1 && temp <= 99 ? temp : null;
 }
 
 function numberToClauseId(num) {
@@ -77,7 +102,7 @@ function findClauseReferences(clauseBody, validClauseIds) {
     }
   }
   
-  const tiaoPattern = /(第[一二三四五六七八九十百零\d]+[条款])(?!\d)/g;
+  const tiaoPattern = /(第[一二三四五六七八九十百零壹贰叁肆伍陆柒捌玖拾佰\d]+[条款])(?!\d)/g;
   while ((match = tiaoPattern.exec(clauseBody)) !== null) {
     const fullMatch = match[0];
     const numMatch = fullMatch.match(/第(.+?)[条款]/);
@@ -100,7 +125,7 @@ function findClauseReferences(clauseBody, validClauseIds) {
     }
   }
   
-  const prefixPattern = /(参照|依据|见|按照|根据|参见)\s*第?([一二三四五六七八九十百零\d]+)[条款]?/g;
+  const prefixPattern = /(参照|依据|见|按照|根据|参见)\s*第?([一二三四五六七八九十百零壹贰叁肆伍陆柒捌玖拾佰\d]+)[条款]?/g;
   while ((match = prefixPattern.exec(clauseBody)) !== null) {
     const num = chineseToNumber(match[2]);
     if (num) {

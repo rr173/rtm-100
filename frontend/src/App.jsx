@@ -28,6 +28,7 @@ export default function App() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [depsData, setDepsData] = useState(null);
   const [depsLoading, setDepsLoading] = useState(false);
+  const [graphRevision, setGraphRevision] = useState(1);
 
   useEffect(() => {
     fetchContracts().then(data => {
@@ -94,9 +95,16 @@ export default function App() {
 
   useEffect(() => {
     if (selectedContractId && viewMode === 'graph') {
-      loadDepsData(selectedContractId, 1);
+      loadDepsData(selectedContractId, graphRevision);
     }
-  }, [selectedContractId, viewMode, loadDepsData]);
+  }, [selectedContractId, viewMode, graphRevision, loadDepsData]);
+
+  useEffect(() => {
+    if (revisions.length > 0) {
+      const maxRev = Math.max(...revisions.map(r => r.revision_number));
+      setGraphRevision(maxRev);
+    }
+  }, [revisions]);
 
   const handleClauseSelect = (clauseId) => {
     setSelectedClauseId(clauseId);
@@ -188,6 +196,23 @@ export default function App() {
                   {revisions.map(r => (
                     <option key={r.revision_number} value={r.revision_number}
                       disabled={r.revision_number <= fromRevision}>
+                      版本 {r.revision_number}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+          {viewMode === 'graph' && revisions.length > 0 && (
+            <div className="version-selectors">
+              <div className="version-selector">
+                <label>版本:</label>
+                <select
+                  value={graphRevision}
+                  onChange={e => setGraphRevision(parseInt(e.target.value))}
+                >
+                  {revisions.map(r => (
+                    <option key={r.revision_number} value={r.revision_number}>
                       版本 {r.revision_number}
                     </option>
                   ))}

@@ -226,12 +226,11 @@ async function startServer() {
       'SELECT MAX(revision_number) as max_rev FROM contract_revisions WHERE contract_id = ?',
       [contractId]
     );
-    const nextRevision = (maxRevision?.max_rev || 0) + 1;
-    const previousRevision = nextRevision;
-
+    
+    let previousRevision = maxRevision?.max_rev || 0;
     let previousClauses = null;
 
-    if (nextRevision === 1) {
+    if (previousRevision === 0) {
       const currentClauses = queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
       const clausesForJson = currentClauses.map(c => ({
         clause_id: c.clause_id,
@@ -244,7 +243,16 @@ async function startServer() {
         'INSERT INTO contract_revisions (contract_id, revision_number, clauses_json) VALUES (?, ?, ?)',
         [contractId, 1, JSON.stringify(clausesForJson)]
       );
+      previousRevision = 1;
       previousClauses = clausesForJson;
+      
+      const clausesForAnalyze = currentClauses.map(c => ({
+        clause_id: c.clause_id,
+        title: c.title,
+        body: c.body
+      }));
+      const prevDeps = analyzeDependencies(contractId, 1, clausesForAnalyze);
+      saveDependencies(prevDeps);
     } else {
       const prevData = queryOne(
         'SELECT clauses_json FROM contract_revisions WHERE contract_id = ? AND revision_number = ?',
@@ -263,7 +271,7 @@ async function startServer() {
       tags: c.tags || []
     }));
 
-    const newRevisionNumber = nextRevision + 1;
+    const newRevisionNumber = previousRevision + 1;
 
     runSql(
       'INSERT INTO contract_revisions (contract_id, revision_number, clauses_json) VALUES (?, ?, ?)',
@@ -283,17 +291,6 @@ async function startServer() {
 
     const newDeps = analyzeDependencies(contractId, newRevisionNumber, clausesForStorage);
     saveDependencies(newDeps);
-
-    if (nextRevision === 1) {
-      const currentClauses = queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
-      const clausesForAnalyze = currentClauses.map(c => ({
-        clause_id: c.clause_id,
-        title: c.title,
-        body: c.body
-      }));
-      const prevDeps = analyzeDependencies(contractId, 1, clausesForAnalyze);
-      saveDependencies(prevDeps);
-    }
 
     let affectedClauses = [];
     if (previousClauses) {
