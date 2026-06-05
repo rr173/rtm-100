@@ -67,9 +67,10 @@ async function startServer() {
   });
 
   app.get('/api/contracts/:id/conflicts', (req, res) => {
+    const revision = parseInt(req.query.revision || '1');
     const conflicts = queryAll(
-      'SELECT * FROM detected_conflicts WHERE contract_id = ?',
-      [req.params.id]
+      'SELECT * FROM detected_conflicts WHERE contract_id = ? AND revision = ?',
+      [req.params.id, revision]
     );
 
     const reviewActions = queryAll('SELECT * FROM review_actions');
@@ -87,9 +88,10 @@ async function startServer() {
   });
 
   app.get('/api/contracts/:id/risks', (req, res) => {
+    const revision = parseInt(req.query.revision || '1');
     const annotations = queryAll(
-      'SELECT * FROM risk_annotations WHERE contract_id = ?',
-      [req.params.id]
+      'SELECT * FROM risk_annotations WHERE contract_id = ? AND revision = ?',
+      [req.params.id, revision]
     );
     res.json(annotations);
   });
