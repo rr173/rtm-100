@@ -431,8 +431,26 @@ function getTodayStr() {
   return `${y}-${m}-${d}`;
 }
 
+function isValidDateStr(dateStr) {
+  if (typeof dateStr !== 'string') return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+  const d = parseDate(dateStr);
+  if (isNaN(d.getTime())) return false;
+  return true;
+}
+
 function scanNotifications(date) {
-  const scanDate = date || getTodayStr();
+  let scanDate;
+  if (date === undefined || date === null) {
+    scanDate = getTodayStr();
+  } else {
+    if (!isValidDateStr(date)) {
+      const err = new Error('date格式必须为YYYY-MM-DD');
+      err.status = 400;
+      throw err;
+    }
+    scanDate = date;
+  }
   const sevenDaysLater = addDays(scanDate, 7);
 
   const pendingPlans = queryAll(
@@ -508,26 +526,29 @@ function getNotifications(filters = {}) {
   const params = [];
 
   if (!include_read || include_read === 'false' || include_read === false) {
-    conditions.push('is_read = 0');
+    conditions.push('n.is_read = 0');
   }
   if (party) {
-    conditions.push('responsible_party = ?');
+    conditions.push('n.responsible_party = ?');
     params.push(party);
   }
   if (type) {
-    conditions.push('type = ?');
+    conditions.push('n.type = ?');
     params.push(type);
   }
   if (contract_id) {
-    conditions.push('contract_id = ?');
+    conditions.push('n.contract_id = ?');
     params.push(contract_id);
   }
+  conditions.push("ep.status = 'pending'");
 
-  const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+  const where = 'WHERE ' + conditions.join(' AND ');
   const rows = queryAll(
-    `SELECT id, contract_id, clause_id, type, due_date, responsible_party, message, is_read, created_at
-     FROM notifications ${where}
-     ORDER BY created_at DESC`,
+    `SELECT n.id, n.contract_id, n.clause_id, n.type, n.due_date, n.responsible_party, n.message, n.is_read, n.created_at
+     FROM notifications n
+     LEFT JOIN execution_plan ep ON n.contract_id = ep.contract_id AND n.clause_id = ep.clause_id
+     ${where}
+     ORDER BY n.created_at DESC`,
     params
   );
 
@@ -536,11 +557,15 @@ function getNotifications(filters = {}) {
 
 function getNotificationStats() {
   const totalUnread = queryOne(
-    'SELECT COUNT(*) as cnt FROM notifications WHERE is_read = 0'
+    `SELECT COUNT(*) as cnt FROM notifications n
+     LEFT JOIN execution_plan ep ON n.contract_id = ep.contract_id AND n.clause_id = ep.clause_id
+     WHERE n.is_read = 0 AND ep.status = 'pending'`
   )?.cnt || 0;
 
   const byTypeRows = queryAll(
-    `SELECT type, COUNT(*) as cnt FROM notifications WHERE is_read = 0 GROUP BY type`
+    `SELECT n.type, COUNT(*) as cnt FROM notifications n
+     LEFT JOIN execution_plan ep ON n.contract_id = ep.contract_id AND n.clause_id = ep.clause_id
+     WHERE n.is_read = 0 AND ep.status = 'pending' GROUP BY n.type`
   );
   const byType = { upcoming: 0, overdue: 0 };
   for (const r of byTypeRows) {
@@ -548,7 +573,9 @@ function getNotificationStats() {
   }
 
   const byPartyRows = queryAll(
-    `SELECT responsible_party, COUNT(*) as cnt FROM notifications WHERE is_read = 0 GROUP BY responsible_party`
+    `SELECT n.responsible_party, COUNT(*) as cnt FROM notifications n
+     LEFT JOIN execution_plan ep ON n.contract_id = ep.contract_id AND n.clause_id = ep.clause_id
+     WHERE n.is_read = 0 AND ep.status = 'pending' GROUP BY n.responsible_party`
   );
   const byParty = { '甲方': 0, '乙方': 0 };
   for (const r of byPartyRows) {
@@ -577,7 +604,18 @@ function markNotificationRead(id) {
 }
 
 function markAllRead(contractId) {
-  if (contractId) {
+  if (contractId !== undefined && contractId !== null) {
+    if (!Number.isInteger(contractId) || contractId <= 0) {
+      const err = new Error('contract_id必须是正整数');
+      err.status = 400;
+      throw err;
+    }
+    const contract = queryOne('SELECT id FROM contracts WHERE id = ?', [contractId]);
+    if (!contract) {
+      const err = new Error('合同不存在');
+      err.status = 404;
+      throw err;
+    }
     const result = runSql(
       'UPDATE notifications SET is_read = 1 WHERE contract_id = ? AND is_read = 0',
       [contractId]
