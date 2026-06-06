@@ -71,6 +71,11 @@ const {
   commentWorkflow,
   getWorkflowHistory
 } = require('./workflowEngine');
+const {
+  buildIndex,
+  searchSimilar,
+  detectPlagiarism
+} = require('./searchEngine');
 
 const app = express();
 app.use(cors());
@@ -1265,6 +1270,50 @@ async function startServer() {
     const contractId = parseInt(req.params.id);
     const history = getWorkflowHistory(contractId);
     res.json(history);
+  });
+
+  app.post('/api/search/index', (req, res) => {
+    try {
+      const { contract_id } = req.body;
+      const result = buildIndex(contract_id ? parseInt(contract_id) : undefined);
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/search/query', (req, res) => {
+    try {
+      const { text, top_k, min_score, exclude_contract_id } = req.body;
+      if (!text) {
+        return res.status(400).json({ error: 'text为必填项' });
+      }
+      const result = searchSimilar(
+        text,
+        top_k !== undefined ? parseInt(top_k) : 5,
+        min_score !== undefined ? parseFloat(min_score) : 0.1,
+        exclude_contract_id ? parseInt(exclude_contract_id) : undefined
+      );
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/search/plagiarism', (req, res) => {
+    try {
+      const { contract_id, threshold } = req.body;
+      if (!contract_id) {
+        return res.status(400).json({ error: 'contract_id为必填项' });
+      }
+      const result = detectPlagiarism(
+        parseInt(contract_id),
+        threshold !== undefined ? parseFloat(threshold) : 0.7
+      );
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
   });
 
   const PORT = process.env.PORT || 3001;

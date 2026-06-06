@@ -292,6 +292,19 @@ async function initDb() {
     );
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS search_index (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      clause_id TEXT NOT NULL,
+      vector_json TEXT NOT NULL,
+      terms_count INTEGER NOT NULL DEFAULT 0,
+      indexed_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+      UNIQUE(contract_id, clause_id)
+    );
+  `);
+
   const conflictCols = db.exec("PRAGMA table_info(detected_conflicts)");
   const hasConflictRevision = conflictCols[0]?.values?.some(row => row[1] === 'revision');
   if (!hasConflictRevision) {

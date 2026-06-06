@@ -7,6 +7,7 @@ const { seedDemoTemplates } = require('./templateEngine');
 const { seedExecutionPlan } = require('./executionTracker');
 const { seedDemoCostModels } = require('./costEngine');
 const { seedDefaultTemplate, seedDemoWorkflow } = require('./workflowEngine');
+const { buildIndex } = require('./searchEngine');
 
 function seed() {
   seedDemoTemplates();
@@ -21,6 +22,12 @@ function seed() {
   const existing = queryOne('SELECT COUNT(*) as cnt FROM contracts');
   if (existing && existing.cnt > 0) {
     console.log('Demo contract data already exists, skipping seed.');
+    const idxCount = queryOne('SELECT COUNT(*) as cnt FROM search_index');
+    if (!idxCount || idxCount.cnt === 0) {
+      console.log('Search index not found, building index for existing contracts...');
+      const idxResult = buildIndex();
+      console.log(`Search index built: ${idxResult.indexed_clauses_count} clauses, ${idxResult.total_terms} terms.`);
+    }
     return;
   }
 
@@ -158,6 +165,9 @@ function seed() {
   if (demoWorkflow) {
     console.log(`Seeded demo workflow: status=${demoWorkflow.status}, current_step=${demoWorkflow.current_step?.role || 'N/A'}`);
   }
+
+  const idxResult = buildIndex();
+  console.log(`Search index built: ${idxResult.indexed_clauses_count} clauses, ${idxResult.total_terms} terms.`);
 
   console.log('Demo data seeded successfully.');
 }
