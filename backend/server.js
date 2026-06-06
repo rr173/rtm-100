@@ -889,6 +889,9 @@ async function startServer() {
       if (!selection.template_id || !selection.clause_id) {
         return res.status(400).json({ error: '每个template_selection必须包含template_id和clause_id' });
       }
+      if (!selection.title) {
+        return res.status(400).json({ error: `clause_id="${selection.clause_id}"缺少title字段,条款标题为必填项` });
+      }
       if (clauseIdSet.has(selection.clause_id)) {
         return res.status(400).json({ error: `clause_id"${selection.clause_id}"重复,条款编号必须唯一` });
       }

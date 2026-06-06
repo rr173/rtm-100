@@ -203,9 +203,22 @@ function getConflictingTagPairs() {
   return pairs;
 }
 
+const REASONABLE_COEXIST = new Set([
+  'transfer_restriction|transfer_permission',
+  'transfer_permission|transfer_restriction',
+  'confidentiality|disclosure_permission',
+  'disclosure_permission|confidentiality'
+]);
+
+function isReasonableCoexist(tagA, tagB) {
+  return REASONABLE_COEXIST.has(`${tagA}|${tagB}`);
+}
+
 function isTagsConflicting(existingTagSet, candidateTags, conflictingPairs) {
   for (const existingTag of existingTagSet) {
     for (const candidateTag of candidateTags) {
+      if (existingTag === candidateTag) continue;
+      if (isReasonableCoexist(existingTag, candidateTag)) continue;
       if (conflictingPairs.has(`${existingTag}|${candidateTag}`)) {
         return true;
       }
@@ -227,20 +240,10 @@ function recommendTemplates(existingTags) {
     for (const associatedTag of association.associated) {
       if (existingTagSet.has(associatedTag)) continue;
 
-      let directConflict = false;
-      for (const existingTag of existingTagSet) {
-        if (conflictingPairs.has(`${existingTag}|${associatedTag}`)) {
-          directConflict = true;
-          break;
-        }
-      }
-
       const matchingTemplates = allTemplates.filter(t => {
         if (recommendedTemplateIds.has(t.id)) return false;
         if (!t.auto_tags.includes(associatedTag)) return false;
-        if (directConflict) {
-          return !isTagsConflicting(existingTagSet, t.auto_tags, conflictingPairs);
-        }
+        if (isTagsConflicting(existingTagSet, t.auto_tags, conflictingPairs)) return false;
         return true;
       });
 

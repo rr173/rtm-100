@@ -149,12 +149,47 @@ function buildConflictReason(clauseA, clauseB, rule, conflictType) {
   return `条款"${clauseA.title}"(标签: ${tagsA.join(',')})与条款"${clauseB.title}"(标签: ${tagsB.join(',')})在"${rule.tag_a}"与"${rule.tag_b}"上存在潜在重叠,建议审阅。`;
 }
 
+const SELF_CONFLICT_WHITELIST = new Set([
+  'transfer_restriction|transfer_permission',
+  'transfer_permission|transfer_restriction',
+  'confidentiality|disclosure_permission',
+  'disclosure_permission|confidentiality'
+]);
+
+function isReasonableSelfConflict(tagA, tagB) {
+  return SELF_CONFLICT_WHITELIST.has(`${tagA}|${tagB}`);
+}
+
 function detectConflicts(contractId, revision = 1, clausesInput = null) {
   const clauses = clausesInput || queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
   const conflictRules = queryAll('SELECT * FROM conflict_rules');
 
   const conflicts = [];
   const conflictPairs = new Set();
+
+  for (const clause of clauses) {
+    const tags = JSON.parse(clause.tags);
+
+    for (const rule of conflictRules) {
+      const hasTagA = tags.includes(rule.tag_a);
+      const hasTagB = tags.includes(rule.tag_b);
+
+      if (hasTagA && hasTagB && !isReasonableSelfConflict(rule.tag_a, rule.tag_b)) {
+        const pairKey = `${clause.clause_id}|${clause.clause_id}|${rule.tag_a}|${rule.tag_b}`;
+        if (!conflictPairs.has(pairKey)) {
+          conflictPairs.add(pairKey);
+          conflicts.push({
+            contract_id: contractId,
+            clause_a_id: clause.clause_id,
+            clause_b_id: clause.clause_id,
+            conflict_type: 'contradiction',
+            severity: 'critical',
+            reason: `条款"${clause.title}"同时包含"${rule.tag_a}"和"${rule.tag_b}"两种互斥约束,条款自身存在逻辑矛盾,需要审阅确认。`
+          });
+        }
+      }
+    }
+  }
 
   for (let i = 0; i < clauses.length; i++) {
     for (let j = i + 1; j < clauses.length; j++) {
