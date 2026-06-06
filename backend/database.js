@@ -243,6 +243,18 @@ async function initDb() {
     );
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS cost_models (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      target_tag TEXT NOT NULL,
+      value_dimension TEXT NOT NULL CHECK(value_dimension IN ('amount', 'duration', 'percentage')),
+      formula_type TEXT NOT NULL CHECK(formula_type IN ('linear', 'threshold')),
+      params_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
   const conflictCols = db.exec("PRAGMA table_info(detected_conflicts)");
   const hasConflictRevision = conflictCols[0]?.values?.some(row => row[1] === 'revision');
   if (!hasConflictRevision) {

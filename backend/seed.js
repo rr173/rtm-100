@@ -5,9 +5,15 @@ const { createRule, auditContract } = require('./complianceEngine');
 const { seedNegotiationPositions } = require('./negotiationEngine');
 const { seedDemoTemplates } = require('./templateEngine');
 const { seedExecutionPlan } = require('./executionTracker');
+const { seedDemoCostModels } = require('./costEngine');
 
 function seed() {
   seedDemoTemplates();
+
+  const seededModels = seedDemoCostModels();
+  if (seededModels > 0) {
+    console.log(`Seeded ${seededModels} demo cost models.`);
+  }
 
   const existing = queryOne('SELECT COUNT(*) as cnt FROM contracts');
   if (existing && existing.cnt > 0) {

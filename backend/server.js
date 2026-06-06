@@ -53,6 +53,13 @@ const {
   markNotificationRead,
   markAllRead
 } = require('./executionTracker');
+const {
+  createCostModel,
+  getCostModels,
+  deleteCostModel,
+  evaluateRevisionImpact,
+  batchEvaluateImpact
+} = require('./costEngine');
 
 const app = express();
 app.use(cors());
@@ -1097,6 +1104,65 @@ async function startServer() {
     } catch (err) {
       res.status(err.status || 400).json({ error: err.message });
     }
+  });
+
+  app.post('/api/cost-models', (req, res) => {
+    try {
+      const model = createCostModel(req.body);
+      res.json(model);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/cost-models', (req, res) => {
+    const models = getCostModels();
+    res.json(models);
+  });
+
+  app.delete('/api/cost-models/:id', (req, res) => {
+    const deleted = deleteCostModel(req.params.id);
+    if (deleted) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: '成本模型不存在' });
+    }
+  });
+
+  app.post('/api/contracts/:id/cost-impact', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const { from_revision, to_revision } = req.body;
+
+    if (!from_revision || !to_revision) {
+      return res.status(400).json({ error: 'from_revision和to_revision为必填项' });
+    }
+    if (from_revision >= to_revision) {
+      return res.status(400).json({ error: 'from_revision必须小于to_revision' });
+    }
+
+    try {
+      const result = evaluateRevisionImpact(contractId, from_revision, to_revision);
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/cost-impact/batch', (req, res) => {
+    const { contract_ids, from_revision, to_revision } = req.body;
+
+    if (!Array.isArray(contract_ids) || contract_ids.length === 0) {
+      return res.status(400).json({ error: 'contract_ids为必填数组' });
+    }
+    if (!from_revision || !to_revision) {
+      return res.status(400).json({ error: 'from_revision和to_revision为必填项' });
+    }
+    if (from_revision >= to_revision) {
+      return res.status(400).json({ error: 'from_revision必须小于to_revision' });
+    }
+
+    const result = batchEvaluateImpact(contract_ids, from_revision, to_revision);
+    res.json(result);
   });
 
   const PORT = process.env.PORT || 3001;
