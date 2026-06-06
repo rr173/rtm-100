@@ -60,6 +60,17 @@ const {
   evaluateRevisionImpact,
   batchEvaluateImpact
 } = require('./costEngine');
+const {
+  createWorkflowTemplate,
+  getWorkflowTemplates,
+  deleteWorkflowTemplate,
+  startWorkflow,
+  getWorkflowStatus,
+  approveWorkflow,
+  rejectWorkflow,
+  commentWorkflow,
+  getWorkflowHistory
+} = require('./workflowEngine');
 
 const app = express();
 app.use(cors());
@@ -1163,6 +1174,97 @@ async function startServer() {
 
     const result = batchEvaluateImpact(contract_ids, from_revision, to_revision);
     res.json(result);
+  });
+
+  app.post('/api/workflow/templates', (req, res) => {
+    try {
+      const { name, steps } = req.body;
+      const template = createWorkflowTemplate(name, steps);
+      res.json(template);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/workflow/templates', (req, res) => {
+    const templates = getWorkflowTemplates();
+    res.json(templates);
+  });
+
+  app.delete('/api/workflow/templates/:id', (req, res) => {
+    const deleted = deleteWorkflowTemplate(req.params.id);
+    if (deleted) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: '审批链模板不存在' });
+    }
+  });
+
+  app.post('/api/contracts/:id/workflow/start', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const { template_id, initiator } = req.body;
+
+    if (!template_id) {
+      return res.status(400).json({ error: 'template_id为必填项' });
+    }
+
+    try {
+      const status = startWorkflow(contractId, template_id, initiator);
+      res.json(status);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/contracts/:id/workflow', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const status = getWorkflowStatus(contractId);
+    if (!status) {
+      return res.status(404).json({ error: '该合同暂无工作流记录' });
+    }
+    res.json(status);
+  });
+
+  app.post('/api/contracts/:id/workflow/approve', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const { approver, comment } = req.body;
+
+    try {
+      const status = approveWorkflow(contractId, approver, comment);
+      res.json(status);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/contracts/:id/workflow/reject', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const { approver, reason } = req.body;
+
+    try {
+      const status = rejectWorkflow(contractId, approver, reason);
+      res.json(status);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/contracts/:id/workflow/comment', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const { approver, comment } = req.body;
+
+    try {
+      const status = commentWorkflow(contractId, approver, comment);
+      res.json(status);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/contracts/:id/workflow/history', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const history = getWorkflowHistory(contractId);
+    res.json(history);
   });
 
   const PORT = process.env.PORT || 3001;

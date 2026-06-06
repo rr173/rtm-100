@@ -6,6 +6,7 @@ const { seedNegotiationPositions } = require('./negotiationEngine');
 const { seedDemoTemplates } = require('./templateEngine');
 const { seedExecutionPlan } = require('./executionTracker');
 const { seedDemoCostModels } = require('./costEngine');
+const { seedDefaultTemplate, seedDemoWorkflow } = require('./workflowEngine');
 
 function seed() {
   seedDemoTemplates();
@@ -14,6 +15,8 @@ function seed() {
   if (seededModels > 0) {
     console.log(`Seeded ${seededModels} demo cost models.`);
   }
+
+  seedDefaultTemplate();
 
   const existing = queryOne('SELECT COUNT(*) as cnt FROM contracts');
   if (existing && existing.cnt > 0) {
@@ -150,6 +153,11 @@ function seed() {
   console.log('Seeded negotiation positions for C05, C07, C09, C11 clauses.');
 
   seedExecutionPlan(contractId);
+
+  const demoWorkflow = seedDemoWorkflow(contractId);
+  if (demoWorkflow) {
+    console.log(`Seeded demo workflow: status=${demoWorkflow.status}, current_step=${demoWorkflow.current_step?.role || 'N/A'}`);
+  }
 
   console.log('Demo data seeded successfully.');
 }

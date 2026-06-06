@@ -255,6 +255,43 @@ async function initDb() {
     );
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS workflow_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      steps_json TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS workflow_instances (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      template_id INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('in_progress', 'completed', 'rejected')),
+      current_step INTEGER NOT NULL DEFAULT 0,
+      initiator TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      completed_at TEXT,
+      FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+      FOREIGN KEY (template_id) REFERENCES workflow_templates(id)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS workflow_actions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      instance_id INTEGER NOT NULL,
+      step_order INTEGER NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('approve', 'reject', 'comment', 'start')),
+      approver TEXT NOT NULL,
+      comment TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (instance_id) REFERENCES workflow_instances(id) ON DELETE CASCADE
+    );
+  `);
+
   const conflictCols = db.exec("PRAGMA table_info(detected_conflicts)");
   const hasConflictRevision = conflictCols[0]?.values?.some(row => row[1] === 'revision');
   if (!hasConflictRevision) {
