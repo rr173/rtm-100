@@ -189,9 +189,52 @@ function moveTowardsBottom(current, bottomLine, preference, concession) {
   }
 }
 
+function calculateDistancePct(current, ideal, bottomLine) {
+  const totalRange = Math.abs(bottomLine - ideal);
+  if (totalRange === 0) return { distance_to_ideal_pct: 0, distance_to_bottom_pct: 0 };
+  const distanceToIdeal = Math.abs(current - ideal);
+  const distanceToBottom = Math.abs(current - bottomLine);
+  return {
+    distance_to_ideal_pct: Math.round((distanceToIdeal / totalRange) * 10000) / 100,
+    distance_to_bottom_pct: Math.round((distanceToBottom / totalRange) * 10000) / 100
+  };
+}
+
+function buildSnapshot(clauseStates) {
+  const partyAPositions = [];
+  const partyBPositions = [];
+
+  for (const key in clauseStates) {
+    const state = clauseStates[key];
+    if (state.settled) continue;
+
+    const distA = calculateDistancePct(state.party_a_current, state.party_a_ideal, state.party_a_bottom);
+    partyAPositions.push({
+      clause_id: state.clause_id,
+      current_offer: Math.round(state.party_a_current * 100) / 100,
+      distance_to_ideal_pct: distA.distance_to_ideal_pct,
+      distance_to_bottom_pct: distA.distance_to_bottom_pct
+    });
+
+    const distB = calculateDistancePct(state.party_b_current, state.party_b_ideal, state.party_b_bottom);
+    partyBPositions.push({
+      clause_id: state.clause_id,
+      current_offer: Math.round(state.party_b_current * 100) / 100,
+      distance_to_ideal_pct: distB.distance_to_ideal_pct,
+      distance_to_bottom_pct: distB.distance_to_bottom_pct
+    });
+  }
+
+  return {
+    party_a_positions: partyAPositions,
+    party_b_positions: partyBPositions
+  };
+}
+
 function simulateNegotiation(contractId, maxRounds = 5, strategy = 'balanced') {
   const sim = runSimulationInMemory(contractId, maxRounds, strategy);
   const { clauseStates } = sim;
+  const historyJson = JSON.stringify(sim.rounds);
 
   for (const key in clauseStates) {
     const state = clauseStates[key];
@@ -202,8 +245,8 @@ function simulateNegotiation(contractId, maxRounds = 5, strategy = 'balanced') {
     );
     runSql(
       `INSERT INTO negotiation_results 
-       (contract_id, clause_id, aspect, status, agreed_value, party_a_final, party_b_final, rounds)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (contract_id, clause_id, aspect, status, agreed_value, party_a_final, party_b_final, rounds, strategy, max_rounds, history_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         contractId,
         state.clause_id,
@@ -212,7 +255,10 @@ function simulateNegotiation(contractId, maxRounds = 5, strategy = 'balanced') {
         state.agreed_value,
         Math.round(state.party_a_current * 100) / 100,
         Math.round(state.party_b_current * 100) / 100,
-        state.settled_round || maxRounds
+        state.settled_round || maxRounds,
+        strategy,
+        maxRounds,
+        historyJson
       ]
     );
   }
@@ -312,10 +358,13 @@ function runSimulationInMemory(contractId, maxRounds = 5, strategy = 'balanced',
       }
     }
 
+    const snapshot = buildSnapshot(clauseStates);
+
     rounds.push({
       round_number: round,
       moves: roundMoves,
-      settled: roundSettled
+      settled: roundSettled,
+      snapshot
     });
 
     const allSettled = Object.values(clauseStates).every(s => s.settled);
@@ -638,6 +687,272 @@ function seedNegotiationPositions(contractId) {
   }
 }
 
+function getNegotiationHistory(contractId) {
+  const rows = queryAll(
+    'SELECT * FROM negotiation_results WHERE contract_id = ? LIMIT 1',
+    [contractId]
+  );
+
+  if (rows.length === 0 || !rows[0].history_json) {
+    return null;
+  }
+
+  const row = rows[0];
+  let rounds = [];
+  try {
+    rounds = JSON.parse(row.history_json);
+  } catch (e) {
+    rounds = [];
+  }
+
+  const allResults = queryAll(
+    'SELECT * FROM negotiation_results WHERE contract_id = ?',
+    [contractId]
+  );
+
+  const finalResult = {
+    settled_clauses: [],
+    deadlocked_clauses: []
+  };
+
+  for (const r of allResults) {
+    if (r.status === 'settled') {
+      finalResult.settled_clauses.push({
+        clause_id: r.clause_id,
+        aspect: r.aspect,
+        agreed_value: r.agreed_value
+      });
+    } else {
+      finalResult.deadlocked_clauses.push({
+        clause_id: r.clause_id,
+        aspect: r.aspect,
+        party_a_final: r.party_a_final,
+        party_b_final: r.party_b_final,
+        gap: Math.round(Math.abs(r.party_a_final - r.party_b_final) * 100) / 100
+      });
+    }
+  }
+
+  return {
+    contract_id: contractId,
+    strategy: row.strategy || 'balanced',
+    max_rounds: row.max_rounds || 5,
+    simulated_at: row.simulated_at || row.created_at,
+    rounds,
+    final_result: finalResult
+  };
+}
+
+function buildClauseConcessionSeries(rounds, partyKey, clauseId) {
+  const series = [];
+  const snapshotKey = partyKey === 'party_a' ? 'party_a_positions' : 'party_b_positions';
+
+  for (let i = 0; i < rounds.length; i++) {
+    const round = rounds[i];
+    const positions = round.snapshot?.[snapshotKey] || [];
+    const pos = positions.find(p => p.clause_id === clauseId);
+    if (pos) {
+      series.push({
+        round_number: round.round_number,
+        distance_to_ideal_pct: pos.distance_to_ideal_pct
+      });
+    }
+  }
+
+  return series;
+}
+
+function detectPatternsForClause(series, clauseId, totalRounds) {
+  const patterns = [];
+  if (series.length < 2) return patterns;
+
+  const concessions = [];
+  for (let i = 1; i < series.length; i++) {
+    const delta = series[i].distance_to_ideal_pct - series[i - 1].distance_to_ideal_pct;
+    concessions.push(Math.max(0, delta));
+  }
+
+  const totalConcession = concessions.reduce((a, b) => a + b, 0);
+  if (totalConcession === 0) return patterns;
+
+  if (series.length >= 2) {
+    const firstTwoRounds = concessions.slice(0, Math.min(2, concessions.length));
+    const firstTwoSum = firstTwoRounds.reduce((a, b) => a + b, 0);
+    if (firstTwoSum / totalConcession > 0.6) {
+      patterns.push({
+        pattern_type: 'front_loaded',
+        description: `条款${clauseId}前两轮让步超过总让步空间的60%(${Math.round(firstTwoSum / totalConcession * 100)}%),后续谈判空间不足`,
+        affected_clauses: [clauseId],
+        severity: 'warning'
+      });
+    }
+  }
+
+  if (concessions.length >= 2) {
+    const lastConcession = concessions[concessions.length - 1];
+    const earlierConcessions = concessions.slice(0, concessions.length - 1);
+    const allEarlierSmall = earlierConcessions.every(c => c / totalConcession < 0.05);
+    if (allEarlierSmall && lastConcession / totalConcession > 0.4) {
+      patterns.push({
+        pattern_type: 'back_loaded',
+        description: `条款${clauseId}前期每轮让步不足5%,最后一轮被迫让步${Math.round(lastConcession / totalConcession * 100)}%`,
+        affected_clauses: [clauseId],
+        severity: 'warning'
+      });
+    }
+  }
+
+  let stallStart = -1;
+  let maxStall = 0;
+  for (let i = 0; i < concessions.length; i++) {
+    if (concessions[i] === 0) {
+      if (stallStart === -1) stallStart = i;
+      maxStall = Math.max(maxStall, i - stallStart + 1);
+    } else {
+      stallStart = -1;
+    }
+  }
+  if (maxStall >= 2) {
+    patterns.push({
+      pattern_type: 'stalled',
+      description: `条款${clauseId}连续${maxStall}轮未做出让步,谈判陷入停滞`,
+      affected_clauses: [clauseId],
+      severity: 'info'
+    });
+  }
+
+  if (concessions.length > 0) {
+    const avg = concessions.reduce((a, b) => a + b, 0) / concessions.length;
+    if (avg > 0) {
+      const variance = concessions.reduce((s, c) => s + Math.abs(c - avg), 0) / concessions.length;
+      if (variance / avg <= 0.5) {
+        // steady pattern - do not add to patterns (as per spec)
+      }
+    }
+  }
+
+  return patterns;
+}
+
+function generateRecommendations(patterns) {
+  const recommendations = [];
+  const partyAPatterns = patterns.party_a;
+  const partyBPatterns = patterns.party_b;
+
+  const aFrontLoaded = partyAPatterns.filter(p => p.pattern_type === 'front_loaded');
+  if (aFrontLoaded.length > 0) {
+    recommendations.push({
+      party: '甲方',
+      suggestion: `甲方在${aFrontLoaded.length}个条款上前两轮让步过多,建议采用匀速让步策略,每轮让步控制在总空间的20%-30%以内`
+    });
+  }
+
+  const aBackLoaded = partyAPatterns.filter(p => p.pattern_type === 'back_loaded');
+  if (aBackLoaded.length > 0) {
+    recommendations.push({
+      party: '甲方',
+      suggestion: `甲方在${aBackLoaded.length}个条款上前期过于强硬导致最后被迫大幅让步,建议从中轮开始逐步释放让步空间`
+    });
+  }
+
+  const aStalled = partyAPatterns.filter(p => p.pattern_type === 'stalled');
+  if (aStalled.length > 0) {
+    recommendations.push({
+      party: '甲方',
+      suggestion: `甲方在${aStalled.length}个条款上连续多轮未让步,建议释放积极信号以打破僵局`
+    });
+  }
+
+  const bFrontLoaded = partyBPatterns.filter(p => p.pattern_type === 'front_loaded');
+  if (bFrontLoaded.length > 0) {
+    recommendations.push({
+      party: '乙方',
+      suggestion: `乙方在${bFrontLoaded.length}个条款上前两轮让步过多,建议采用匀速让步策略,每轮让步控制在总空间的20%-30%以内`
+    });
+  }
+
+  const bBackLoaded = partyBPatterns.filter(p => p.pattern_type === 'back_loaded');
+  if (bBackLoaded.length > 0) {
+    recommendations.push({
+      party: '乙方',
+      suggestion: `乙方在${bBackLoaded.length}个条款上前期过于强硬导致最后被迫大幅让步,建议从中轮开始逐步释放让步空间`
+    });
+  }
+
+  const bStalled = partyBPatterns.filter(p => p.pattern_type === 'stalled');
+  if (bStalled.length > 0) {
+    recommendations.push({
+      party: '乙方',
+      suggestion: `乙方在${bStalled.length}个条款上连续多轮未让步,建议释放积极信号以打破僵局`
+    });
+  }
+
+  if (recommendations.length === 0) {
+    recommendations.push({
+      party: '双方',
+      suggestion: '双方让步节奏健康,建议保持当前匀速让步的谈判策略'
+    });
+  }
+
+  return recommendations;
+}
+
+function calculateEfficiencyScore(patternList) {
+  let warnings = 0;
+  let infos = 0;
+  for (const p of patternList) {
+    if (p.severity === 'warning') warnings++;
+    if (p.severity === 'info') infos++;
+  }
+  const score = 100 - (warnings * 20 + infos * 5);
+  return Math.max(0, score);
+}
+
+function debriefNegotiation(contractId) {
+  const history = getNegotiationHistory(contractId);
+  if (!history) return null;
+
+  const { rounds } = history;
+  const clauseIds = new Set();
+
+  for (const round of rounds) {
+    const positions = round.snapshot?.party_a_positions || [];
+    for (const p of positions) clauseIds.add(p.clause_id);
+  }
+
+  const partyAPatterns = [];
+  const partyBPatterns = [];
+
+  for (const clauseId of clauseIds) {
+    const aSeries = buildClauseConcessionSeries(rounds, 'party_a', clauseId);
+    const aPatterns = detectPatternsForClause(aSeries, clauseId, rounds.length);
+    partyAPatterns.push(...aPatterns);
+
+    const bSeries = buildClauseConcessionSeries(rounds, 'party_b', clauseId);
+    const bPatterns = detectPatternsForClause(bSeries, clauseId, rounds.length);
+    partyBPatterns.push(...bPatterns);
+  }
+
+  const patterns = {
+    party_a: partyAPatterns,
+    party_b: partyBPatterns
+  };
+
+  const recommendations = generateRecommendations(patterns);
+
+  const efficiencyScore = {
+    party_a: calculateEfficiencyScore(partyAPatterns),
+    party_b: calculateEfficiencyScore(partyBPatterns)
+  };
+
+  return {
+    contract_id: contractId,
+    patterns,
+    recommendations,
+    efficiency_score: efficiencyScore
+  };
+}
+
 module.exports = {
   savePositions,
   getPositions,
@@ -646,5 +961,7 @@ module.exports = {
   generateReport,
   seedNegotiationPositions,
   compareScenarios,
-  recommendStrategy
+  recommendStrategy,
+  getNegotiationHistory,
+  debriefNegotiation
 };

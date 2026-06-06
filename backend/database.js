@@ -332,6 +332,21 @@ async function initDb() {
     db.run(`ALTER TABLE risk_annotations ADD COLUMN revision INTEGER DEFAULT 1`);
   }
 
+  const negResultCols = db.exec("PRAGMA table_info(negotiation_results)");
+  const colNames = negResultCols[0]?.values?.map(row => row[1]) || [];
+  if (!colNames.includes('history_json')) {
+    db.run(`ALTER TABLE negotiation_results ADD COLUMN history_json TEXT`);
+  }
+  if (!colNames.includes('strategy')) {
+    db.run(`ALTER TABLE negotiation_results ADD COLUMN strategy TEXT`);
+  }
+  if (!colNames.includes('max_rounds')) {
+    db.run(`ALTER TABLE negotiation_results ADD COLUMN max_rounds INTEGER`);
+  }
+  if (!colNames.includes('simulated_at')) {
+    db.run(`ALTER TABLE negotiation_results ADD COLUMN simulated_at TEXT DEFAULT (datetime('now'))`);
+  }
+
   saveDb();
   return db;
 }

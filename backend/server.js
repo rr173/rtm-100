@@ -28,7 +28,9 @@ const {
   simulateNegotiation,
   generateReport,
   compareScenarios,
-  recommendStrategy
+  recommendStrategy,
+  getNegotiationHistory,
+  debriefNegotiation
 } = require('./negotiationEngine');
 const {
   createTemplate,
@@ -856,6 +858,24 @@ async function startServer() {
     const contractId = parseInt(req.params.contractId);
     const result = recommendStrategy(contractId);
     res.json(result);
+  });
+
+  app.get('/api/negotiation/history/:contractId', (req, res) => {
+    const contractId = parseInt(req.params.contractId);
+    const history = getNegotiationHistory(contractId);
+    if (!history) {
+      return res.status(404).json({ error: '未找到该合同的谈判模拟记录' });
+    }
+    res.json(history);
+  });
+
+  app.get('/api/negotiation/debrief/:contractId', (req, res) => {
+    const contractId = parseInt(req.params.contractId);
+    const debrief = debriefNegotiation(contractId);
+    if (!debrief) {
+      return res.status(404).json({ error: '未找到该合同的谈判模拟记录,请先运行模拟' });
+    }
+    res.json(debrief);
   });
 
   app.post('/api/templates', (req, res) => {
