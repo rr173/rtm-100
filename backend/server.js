@@ -975,8 +975,12 @@ async function startServer() {
 
   app.get('/api/contracts/:id/execution-plan', (req, res) => {
     const contractId = parseInt(req.params.id);
-    const result = getExecutionPlan(contractId);
-    res.json(result);
+    try {
+      const result = getExecutionPlan(contractId);
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
   });
 
   app.post('/api/contracts/:id/execution/:clauseId/complete', (req, res) => {

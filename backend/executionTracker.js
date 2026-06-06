@@ -21,12 +21,29 @@ function addDays(dateStr, days) {
   return `${y}-${m}-${day}`;
 }
 
+function ensureContractExists(contractId) {
+  const contract = queryOne('SELECT id FROM contracts WHERE id = ?', [contractId]);
+  if (!contract) {
+    const err = new Error('合同不存在');
+    err.status = 404;
+    throw err;
+  }
+}
+
 function createExecutionPlan(contractId, planData) {
   const { effective_date, deadlines } = planData;
 
   if (!effective_date || !Array.isArray(deadlines) || deadlines.length === 0) {
     throw new Error('effective_date和deadlines为必填项');
   }
+
+  ensureContractExists(contractId);
+
+  const existingClauses = queryAll(
+    'SELECT clause_id FROM clauses WHERE contract_id = ?',
+    [contractId]
+  );
+  const existingClauseIds = new Set(existingClauses.map(c => c.clause_id));
 
   for (const dl of deadlines) {
     if (!dl.clause_id || !dl.due_date || !dl.responsible_party) {
@@ -37,6 +54,11 @@ function createExecutionPlan(contractId, planData) {
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dl.due_date)) {
       throw new Error('due_date格式必须为YYYY-MM-DD');
+    }
+    if (!existingClauseIds.has(dl.clause_id)) {
+      const err = new Error(`条款"${dl.clause_id}"不存在于该合同中`);
+      err.status = 400;
+      throw err;
     }
   }
 
@@ -78,6 +100,7 @@ function createExecutionPlan(contractId, planData) {
 }
 
 function getExecutionPlan(contractId) {
+  ensureContractExists(contractId);
   const rows = queryAll(
     `SELECT clause_id, due_date, responsible_party, status, description, completed_at
      FROM execution_plan
@@ -89,6 +112,7 @@ function getExecutionPlan(contractId) {
 }
 
 function completeClause(contractId, clauseId, operator = 'system') {
+  ensureContractExists(contractId);
   const plan = queryOne(
     'SELECT * FROM execution_plan WHERE contract_id = ? AND clause_id = ?',
     [contractId, clauseId]
@@ -100,6 +124,11 @@ function completeClause(contractId, clauseId, operator = 'system') {
   }
   if (plan.status === 'completed') {
     const err = new Error('该条款已标记为完成，不可重复操作');
+    err.status = 400;
+    throw err;
+  }
+  if (plan.status === 'waived') {
+    const err = new Error('该条款已被豁免，不可标记为完成');
     err.status = 400;
     throw err;
   }
@@ -130,6 +159,7 @@ function waiveClause(contractId, clauseId, reason, operator = 'system') {
     throw err;
   }
 
+  ensureContractExists(contractId);
   const plan = queryOne(
     'SELECT * FROM execution_plan WHERE contract_id = ? AND clause_id = ?',
     [contractId, clauseId]
@@ -141,6 +171,11 @@ function waiveClause(contractId, clauseId, reason, operator = 'system') {
   }
   if (plan.status === 'completed') {
     const err = new Error('该条款已标记为完成，不可豁免');
+    err.status = 400;
+    throw err;
+  }
+  if (plan.status === 'waived') {
+    const err = new Error('该条款已被豁免，不可重复操作');
     err.status = 400;
     throw err;
   }
@@ -165,6 +200,7 @@ function waiveClause(contractId, clauseId, reason, operator = 'system') {
 }
 
 function getClauseHistory(contractId, clauseId) {
+  ensureContractExists(contractId);
   const rows = queryAll(
     `SELECT created_at as time, operator, action, note
      FROM execution_history
@@ -176,6 +212,7 @@ function getClauseHistory(contractId, clauseId) {
 }
 
 function getAlerts(contractId, date) {
+  ensureContractExists(contractId);
   if (!date) {
     const now = new Date();
     const y = now.getFullYear();
@@ -232,6 +269,7 @@ function getAlerts(contractId, date) {
 }
 
 function getExecutionReport(contractId) {
+  ensureContractExists(contractId);
   const plans = queryAll(
     `SELECT clause_id, due_date, responsible_party, status, completed_at
      FROM execution_plan
