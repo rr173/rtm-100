@@ -689,7 +689,7 @@ function seedNegotiationPositions(contractId) {
 
 function getNegotiationHistory(contractId) {
   const rows = queryAll(
-    'SELECT * FROM negotiation_results WHERE contract_id = ? LIMIT 1',
+    "SELECT * FROM negotiation_results WHERE contract_id = ? AND history_json IS NOT NULL ORDER BY COALESCE(simulated_at, created_at) DESC LIMIT 1",
     [contractId]
   );
 
@@ -743,18 +743,36 @@ function getNegotiationHistory(contractId) {
   };
 }
 
-function buildClauseConcessionSeries(rounds, partyKey, clauseId) {
-  const series = [];
-  const snapshotKey = partyKey === 'party_a' ? 'party_a_positions' : 'party_b_positions';
+function collectClauseIdsFromRounds(rounds) {
+  const clauseIds = new Set();
+  for (const round of rounds) {
+    for (const move of round.moves || []) {
+      clauseIds.add(move.clause_id);
+    }
+  }
+  return clauseIds;
+}
 
-  for (let i = 0; i < rounds.length; i++) {
-    const round = rounds[i];
-    const positions = round.snapshot?.[snapshotKey] || [];
-    const pos = positions.find(p => p.clause_id === clauseId);
-    if (pos) {
+function buildClauseConcessionSeries(rounds, partyKey, clauseId, positions) {
+  const series = [];
+  const movePartyName = partyKey === 'party_a' ? '甲方' : '乙方';
+  const pos = positions?.[partyKey]?.find(p => p.clause_id === clauseId);
+  if (!pos) return series;
+
+  const { ideal, bottom_line: bottomLine } = pos;
+
+  series.push({
+    round_number: 0,
+    distance_to_ideal_pct: 0
+  });
+
+  for (const round of rounds) {
+    const move = (round.moves || []).find(m => m.clause_id === clauseId && m.party === movePartyName);
+    if (move) {
+      const dist = calculateDistancePct(move.offered_value, ideal, bottomLine);
       series.push({
         round_number: round.round_number,
-        distance_to_ideal_pct: pos.distance_to_ideal_pct
+        distance_to_ideal_pct: dist.distance_to_ideal_pct
       });
     }
   }
@@ -913,22 +931,18 @@ function debriefNegotiation(contractId) {
   if (!history) return null;
 
   const { rounds } = history;
-  const clauseIds = new Set();
-
-  for (const round of rounds) {
-    const positions = round.snapshot?.party_a_positions || [];
-    for (const p of positions) clauseIds.add(p.clause_id);
-  }
+  const clauseIds = collectClauseIdsFromRounds(rounds);
+  const positions = getPositions(contractId);
 
   const partyAPatterns = [];
   const partyBPatterns = [];
 
   for (const clauseId of clauseIds) {
-    const aSeries = buildClauseConcessionSeries(rounds, 'party_a', clauseId);
+    const aSeries = buildClauseConcessionSeries(rounds, 'party_a', clauseId, positions);
     const aPatterns = detectPatternsForClause(aSeries, clauseId, rounds.length);
     partyAPatterns.push(...aPatterns);
 
-    const bSeries = buildClauseConcessionSeries(rounds, 'party_b', clauseId);
+    const bSeries = buildClauseConcessionSeries(rounds, 'party_b', clauseId, positions);
     const bPatterns = detectPatternsForClause(bSeries, clauseId, rounds.length);
     partyBPatterns.push(...bPatterns);
   }
