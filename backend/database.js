@@ -226,6 +226,23 @@ async function initDb() {
     );
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      clause_id TEXT NOT NULL,
+      type TEXT NOT NULL CHECK(type IN ('upcoming', 'overdue')),
+      due_date TEXT NOT NULL,
+      responsible_party TEXT NOT NULL CHECK(responsible_party IN ('甲方', '乙方')),
+      message TEXT NOT NULL,
+      is_read INTEGER NOT NULL DEFAULT 0,
+      scan_date TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+      UNIQUE(scan_date, contract_id, clause_id, type)
+    );
+  `);
+
   const conflictCols = db.exec("PRAGMA table_info(detected_conflicts)");
   const hasConflictRevision = conflictCols[0]?.values?.some(row => row[1] === 'revision');
   if (!hasConflictRevision) {

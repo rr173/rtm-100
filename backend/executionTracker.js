@@ -423,6 +423,171 @@ function seedExecutionPlan(contractId) {
   console.log('Seeded execution plan for demo contract (C05/C07/C09/C11).');
 }
 
+function getTodayStr() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function scanNotifications(date) {
+  const scanDate = date || getTodayStr();
+  const sevenDaysLater = addDays(scanDate, 7);
+
+  const pendingPlans = queryAll(
+    `SELECT ep.contract_id, ep.clause_id, ep.due_date, ep.responsible_party, c.title as contract_title, cl.title as clause_title
+     FROM execution_plan ep
+     JOIN contracts c ON ep.contract_id = c.id
+     JOIN clauses cl ON ep.contract_id = cl.contract_id AND ep.clause_id = cl.clause_id
+     WHERE ep.status = 'pending'`
+  );
+
+  let newNotifications = 0;
+  let skippedDuplicates = 0;
+  const scannedContractIds = new Set();
+
+  for (const p of pendingPlans) {
+    scannedContractIds.add(p.contract_id);
+    const daysDiff = daysBetween(scanDate, p.due_date);
+
+    let type = null;
+    let days = 0;
+    if (p.due_date < scanDate) {
+      type = 'overdue';
+      days = daysBetween(p.due_date, scanDate);
+    } else if (p.due_date <= sevenDaysLater) {
+      type = 'upcoming';
+      days = daysDiff;
+    }
+
+    if (!type) continue;
+
+    const clauseTitle = p.clause_title || p.clause_id;
+    let message;
+    if (type === 'upcoming') {
+      message = `[${p.contract_title}] ${clauseTitle}(责任方:${p.responsible_party})将于${days}天后到期`;
+    } else {
+      message = `[${p.contract_title}] ${clauseTitle}(责任方:${p.responsible_party})已逾期${days}天`;
+    }
+
+    const existing = queryOne(
+      `SELECT id FROM notifications 
+       WHERE scan_date = ? AND contract_id = ? AND clause_id = ? AND type = ?`,
+      [scanDate, p.contract_id, p.clause_id, type]
+    );
+
+    if (existing) {
+      skippedDuplicates++;
+      continue;
+    }
+
+    try {
+      runSql(
+        `INSERT INTO notifications 
+         (contract_id, clause_id, type, due_date, responsible_party, message, is_read, scan_date)
+         VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+        [p.contract_id, p.clause_id, type, p.due_date, p.responsible_party, message, scanDate]
+      );
+      newNotifications++;
+    } catch (e) {
+      skippedDuplicates++;
+    }
+  }
+
+  return {
+    scanned_contracts: scannedContractIds.size,
+    new_notifications: newNotifications,
+    skipped_duplicates: skippedDuplicates
+  };
+}
+
+function getNotifications(filters = {}) {
+  const { party, type, contract_id, include_read } = filters;
+  const conditions = [];
+  const params = [];
+
+  if (!include_read || include_read === 'false' || include_read === false) {
+    conditions.push('is_read = 0');
+  }
+  if (party) {
+    conditions.push('responsible_party = ?');
+    params.push(party);
+  }
+  if (type) {
+    conditions.push('type = ?');
+    params.push(type);
+  }
+  if (contract_id) {
+    conditions.push('contract_id = ?');
+    params.push(contract_id);
+  }
+
+  const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+  const rows = queryAll(
+    `SELECT id, contract_id, clause_id, type, due_date, responsible_party, message, is_read, created_at
+     FROM notifications ${where}
+     ORDER BY created_at DESC`,
+    params
+  );
+
+  return rows.map(r => ({ ...r, is_read: r.is_read === 1 }));
+}
+
+function getNotificationStats() {
+  const totalUnread = queryOne(
+    'SELECT COUNT(*) as cnt FROM notifications WHERE is_read = 0'
+  )?.cnt || 0;
+
+  const byTypeRows = queryAll(
+    `SELECT type, COUNT(*) as cnt FROM notifications WHERE is_read = 0 GROUP BY type`
+  );
+  const byType = { upcoming: 0, overdue: 0 };
+  for (const r of byTypeRows) {
+    byType[r.type] = r.cnt;
+  }
+
+  const byPartyRows = queryAll(
+    `SELECT responsible_party, COUNT(*) as cnt FROM notifications WHERE is_read = 0 GROUP BY responsible_party`
+  );
+  const byParty = { '甲方': 0, '乙方': 0 };
+  for (const r of byPartyRows) {
+    byParty[r.responsible_party] = r.cnt;
+  }
+
+  return {
+    total_unread: totalUnread,
+    by_type: byType,
+    by_party: byParty
+  };
+}
+
+function markNotificationRead(id) {
+  const existing = queryOne('SELECT id, is_read FROM notifications WHERE id = ?', [id]);
+  if (!existing) {
+    const err = new Error('通知不存在');
+    err.status = 404;
+    throw err;
+  }
+  if (existing.is_read === 1) {
+    return { id, is_read: true, already_read: true };
+  }
+  runSql('UPDATE notifications SET is_read = 1 WHERE id = ?', [id]);
+  return { id, is_read: true, already_read: false };
+}
+
+function markAllRead(contractId) {
+  if (contractId) {
+    const result = runSql(
+      'UPDATE notifications SET is_read = 1 WHERE contract_id = ? AND is_read = 0',
+      [contractId]
+    );
+    return { marked: result.changes, contract_id: contractId };
+  }
+  const result = runSql('UPDATE notifications SET is_read = 1 WHERE is_read = 0');
+  return { marked: result.changes };
+}
+
 module.exports = {
   createExecutionPlan,
   getExecutionPlan,
@@ -431,5 +596,10 @@ module.exports = {
   getClauseHistory,
   getAlerts,
   getExecutionReport,
-  seedExecutionPlan
+  seedExecutionPlan,
+  scanNotifications,
+  getNotifications,
+  getNotificationStats,
+  markNotificationRead,
+  markAllRead
 };

@@ -46,7 +46,12 @@ const {
   waiveClause,
   getClauseHistory,
   getAlerts,
-  getExecutionReport
+  getExecutionReport,
+  scanNotifications,
+  getNotifications,
+  getNotificationStats,
+  markNotificationRead,
+  markAllRead
 } = require('./executionTracker');
 
 const app = express();
@@ -1034,6 +1039,60 @@ async function startServer() {
     const contractId = parseInt(req.params.id);
     try {
       const result = getExecutionReport(contractId);
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/notifications/scan', (req, res) => {
+    try {
+      const date = req.body?.date;
+      const result = scanNotifications(date);
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/notifications', (req, res) => {
+    try {
+      const filters = {
+        party: req.query.party,
+        type: req.query.type,
+        contract_id: req.query.contract_id ? parseInt(req.query.contract_id) : undefined,
+        include_read: req.query.include_read
+      };
+      const result = getNotifications(filters);
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/notifications/stats', (req, res) => {
+    try {
+      const result = getNotificationStats();
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/notifications/:id/read', (req, res) => {
+    const id = parseInt(req.params.id);
+    try {
+      const result = markNotificationRead(id);
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/notifications/read-all', (req, res) => {
+    try {
+      const contractId = req.body?.contract_id ? parseInt(req.body.contract_id) : undefined;
+      const result = markAllRead(contractId);
       res.json(result);
     } catch (err) {
       res.status(err.status || 400).json({ error: err.message });
