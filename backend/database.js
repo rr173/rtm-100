@@ -197,6 +197,35 @@ async function initDb() {
     );
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS execution_plan (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      clause_id TEXT NOT NULL,
+      due_date TEXT NOT NULL,
+      responsible_party TEXT NOT NULL CHECK(responsible_party IN ('甲方', '乙方')),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'completed', 'waived')),
+      description TEXT NOT NULL DEFAULT '',
+      completed_at TEXT,
+      effective_date TEXT,
+      FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+      UNIQUE(contract_id, clause_id)
+    );
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS execution_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      clause_id TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('create', 'complete', 'waive', 'update')),
+      operator TEXT NOT NULL DEFAULT 'system',
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE
+    );
+  `);
+
   const conflictCols = db.exec("PRAGMA table_info(detected_conflicts)");
   const hasConflictRevision = conflictCols[0]?.values?.some(row => row[1] === 'revision');
   if (!hasConflictRevision) {

@@ -39,6 +39,15 @@ const {
   fillTemplateById,
   recommendTemplates
 } = require('./templateEngine');
+const {
+  createExecutionPlan,
+  getExecutionPlan,
+  completeClause,
+  waiveClause,
+  getClauseHistory,
+  getAlerts,
+  getExecutionReport
+} = require('./executionTracker');
 
 const app = express();
 app.use(cors());
@@ -952,6 +961,79 @@ async function startServer() {
       compliance_violations: complianceViolations.length,
       warnings: allWarnings
     });
+  });
+
+  app.post('/api/contracts/:id/execution-plan', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    try {
+      const result = createExecutionPlan(contractId, req.body);
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/contracts/:id/execution-plan', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const result = getExecutionPlan(contractId);
+    res.json(result);
+  });
+
+  app.post('/api/contracts/:id/execution/:clauseId/complete', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const clauseId = req.params.clauseId;
+    const operator = req.body?.operator || 'system';
+    try {
+      const result = completeClause(contractId, clauseId, operator);
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/contracts/:id/execution/:clauseId/waive', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const clauseId = req.params.clauseId;
+    const reason = req.body?.reason;
+    const operator = req.body?.operator || 'system';
+    try {
+      const result = waiveClause(contractId, clauseId, reason, operator);
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/contracts/:id/execution/:clauseId/history', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const clauseId = req.params.clauseId;
+    try {
+      const result = getClauseHistory(contractId, clauseId);
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/contracts/:id/execution/alerts', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const date = req.query.date;
+    try {
+      const result = getAlerts(contractId, date);
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/contracts/:id/execution/report', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    try {
+      const result = getExecutionReport(contractId);
+      res.json(result);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
   });
 
   const PORT = process.env.PORT || 3001;

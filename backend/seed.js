@@ -4,6 +4,7 @@ const { annotateRisks } = require('./riskAnnotation');
 const { createRule, auditContract } = require('./complianceEngine');
 const { seedNegotiationPositions } = require('./negotiationEngine');
 const { seedDemoTemplates } = require('./templateEngine');
+const { seedExecutionPlan } = require('./executionTracker');
 
 function seed() {
   seedDemoTemplates();
@@ -141,6 +142,8 @@ function seed() {
 
   seedNegotiationPositions(contractId);
   console.log('Seeded negotiation positions for C05, C07, C09, C11 clauses.');
+
+  seedExecutionPlan(contractId);
 
   console.log('Demo data seeded successfully.');
 }
