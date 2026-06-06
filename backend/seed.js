@@ -109,11 +109,11 @@ function seed() {
     );
   }
 
-  const conflicts = detectConflicts(contractId);
-  console.log(`Detected ${conflicts.length} conflicts.`);
+  const conflictsResult = detectConflicts(contractId);
+  console.log(`Detected ${conflictsResult.conflicts.length} conflicts.`);
 
-  const annotations = annotateRisks(contractId);
-  console.log(`Annotated ${annotations.length} risk items.`);
+  const risksResult = annotateRisks(contractId);
+  console.log(`Annotated ${risksResult.annotations.length} risk items.`);
 
   const complianceRules = [
     {

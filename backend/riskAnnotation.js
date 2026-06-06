@@ -1,5 +1,5 @@
 const { queryAll, queryOne, runSql } = require('./database');
-const { extractQuantities } = require('./conflictDetection');
+const { extractQuantities, SEVERITY_TO_RISK_LEVEL, getLowerPriorityClause } = require('./conflictDetection');
 
 const LEVEL_ORDER = { high: 3, medium: 2, low: 1 };
 
@@ -33,11 +33,76 @@ function evaluateCondition(condition, quantities) {
   }
 }
 
+function syncConflictDerivedRiskLevel(contractId, conflict, revision) {
+  const targetClauseId = getLowerPriorityClause(conflict.clause_a_id, conflict.clause_b_id);
+  const newRiskLevel = SEVERITY_TO_RISK_LEVEL[conflict.severity];
+
+  const existing = queryOne(
+    'SELECT id, level FROM risk_annotations WHERE contract_id = ? AND conflict_id = ? AND clause_id = ? AND revision = ?',
+    [contractId, conflict.id, targetClauseId, revision]
+  );
+
+  if (!existing) {
+    const triggerReason = `冲突派生风险: 条款"${conflict.clause_a_id}"与条款"${conflict.clause_b_id}"存在${conflict.conflict_type === 'contradiction' ? '矛盾' : '歧义/重叠'}冲突(冲突ID=${conflict.id}),严重等级:${conflict.severity}`;
+    const result = runSql(
+      'INSERT INTO risk_annotations (contract_id, clause_id, rule_id, conflict_id, level, trigger_reason, source, revision) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)',
+      [contractId, targetClauseId, conflict.id, newRiskLevel, triggerReason, 'conflict', revision]
+    );
+    return { id: result.lastInsertRowid };
+  } else if (existing.level !== newRiskLevel) {
+    runSql(
+      'UPDATE risk_annotations SET level = ? WHERE id = ?',
+      [newRiskLevel, existing.id]
+    );
+    return { id: existing.id, level: newRiskLevel };
+  }
+  return existing;
+}
+
+function updateConflictSeveritiesFromRisks(contractId, revision) {
+  const allRisks = queryAll(
+    'SELECT DISTINCT clause_id FROM risk_annotations WHERE contract_id = ? AND revision = ? AND level = ?',
+    [contractId, revision, 'high']
+  );
+  const highRiskClauseIds = new Set(allRisks.map(r => r.clause_id));
+
+  const conflicts = queryAll(
+    'SELECT * FROM detected_conflicts WHERE contract_id = ? AND revision = ?',
+    [contractId, revision]
+  );
+
+  const updated = [];
+  for (const conflict of conflicts) {
+    const hasHighRiskClause = highRiskClauseIds.has(conflict.clause_a_id) || highRiskClauseIds.has(conflict.clause_b_id);
+    const originalSeverity = conflict.original_severity || conflict.severity;
+
+    let newSeverity;
+    if (hasHighRiskClause) {
+      newSeverity = originalSeverity === 'critical' ? 'critical' : 'critical';
+    } else {
+      newSeverity = originalSeverity;
+    }
+
+    if (newSeverity !== conflict.severity) {
+      runSql(
+        'UPDATE detected_conflicts SET severity = ? WHERE id = ?',
+        [newSeverity, conflict.id]
+      );
+      conflict.severity = newSeverity;
+    }
+
+    syncConflictDerivedRiskLevel(contractId, conflict, revision);
+    updated.push(conflict);
+  }
+
+  return updated;
+}
+
 function annotateRisks(contractId, revision = 1, clausesInput = null) {
   const clauses = clausesInput || queryAll('SELECT * FROM clauses WHERE contract_id = ?', [contractId]);
   const riskRules = queryAll('SELECT * FROM risk_rules');
 
-  runSql('DELETE FROM risk_annotations WHERE contract_id = ? AND revision = ?', [contractId, revision]);
+  runSql('DELETE FROM risk_annotations WHERE contract_id = ? AND revision = ? AND source = ?', [contractId, revision, 'rule']);
 
   const annotations = [];
 
@@ -56,27 +121,29 @@ function annotateRisks(contractId, revision = 1, clausesInput = null) {
       if (condResult) {
         const reason = `条款"${clause.title}"匹配规则"${rule.description}",条件"${rule.condition}"满足,风险等级: ${rule.level}`;
 
-        runSql(
-          'INSERT INTO risk_annotations (contract_id, clause_id, rule_id, level, trigger_reason, revision) VALUES (?, ?, ?, ?, ?, ?)',
-          [contractId, clause.clause_id, rule.id, rule.level, reason, revision]
+        const result = runSql(
+          'INSERT INTO risk_annotations (contract_id, clause_id, rule_id, conflict_id, level, trigger_reason, source, revision) VALUES (?, ?, ?, NULL, ?, ?, ?, ?)',
+          [contractId, clause.clause_id, rule.id, rule.level, reason, 'rule', revision]
         );
 
-        const row = queryOne('SELECT last_insert_rowid() as id');
-
         annotations.push({
-          id: row.id,
+          id: result.lastInsertRowid,
           contract_id: contractId,
           clause_id: clause.clause_id,
           rule_id: rule.id,
+          conflict_id: null,
           level: rule.level,
           trigger_reason: reason,
+          source: 'rule',
           revision
         });
       }
     }
   }
 
-  return annotations;
+  const updatedConflicts = updateConflictSeveritiesFromRisks(contractId, revision);
+
+  return { annotations, updated_conflicts: updatedConflicts };
 }
 
 function getClauseRiskLevel(contractId, clauseId, revision = 1) {
@@ -96,4 +163,4 @@ function getClauseRiskLevel(contractId, clauseId, revision = 1) {
   return highest;
 }
 
-module.exports = { annotateRisks, getClauseRiskLevel, evaluateCondition };
+module.exports = { annotateRisks, getClauseRiskLevel, evaluateCondition, updateConflictSeveritiesFromRisks, syncConflictDerivedRiskLevel };

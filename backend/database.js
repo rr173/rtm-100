@@ -65,6 +65,7 @@ async function initDb() {
       clause_b_id TEXT NOT NULL,
       conflict_type TEXT NOT NULL CHECK(conflict_type IN ('contradiction','ambiguity','overlap')),
       severity TEXT NOT NULL CHECK(severity IN ('critical','warning')),
+      original_severity TEXT CHECK(original_severity IN ('critical','warning')),
       reason TEXT NOT NULL,
       FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE
     );
@@ -75,11 +76,14 @@ async function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       contract_id INTEGER NOT NULL,
       clause_id TEXT NOT NULL,
-      rule_id INTEGER NOT NULL,
+      rule_id INTEGER,
+      conflict_id INTEGER,
       level TEXT NOT NULL CHECK(level IN ('high','medium','low')),
       trigger_reason TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'rule' CHECK(source IN ('rule','conflict')),
       FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
-      FOREIGN KEY (rule_id) REFERENCES risk_rules(id) ON DELETE CASCADE
+      FOREIGN KEY (rule_id) REFERENCES risk_rules(id) ON DELETE CASCADE,
+      FOREIGN KEY (conflict_id) REFERENCES detected_conflicts(id) ON DELETE CASCADE
     );
   `);
 
@@ -325,11 +329,30 @@ async function initDb() {
   if (!hasConflictRevision) {
     db.run(`ALTER TABLE detected_conflicts ADD COLUMN revision INTEGER DEFAULT 1`);
   }
+  const hasConflictOriginalSeverity = conflictCols[0]?.values?.some(row => row[1] === 'original_severity');
+  if (!hasConflictOriginalSeverity) {
+    db.run(`ALTER TABLE detected_conflicts ADD COLUMN original_severity TEXT CHECK(original_severity IN ('critical','warning'))`);
+  }
 
   const riskCols = db.exec("PRAGMA table_info(risk_annotations)");
   const hasRiskRevision = riskCols[0]?.values?.some(row => row[1] === 'revision');
   if (!hasRiskRevision) {
     db.run(`ALTER TABLE risk_annotations ADD COLUMN revision INTEGER DEFAULT 1`);
+  }
+  const hasRiskSource = riskCols[0]?.values?.some(row => row[1] === 'source');
+  if (!hasRiskSource) {
+    db.run(`ALTER TABLE risk_annotations ADD COLUMN source TEXT NOT NULL DEFAULT 'rule' CHECK(source IN ('rule','conflict'))`);
+  }
+  const hasRiskConflictId = riskCols[0]?.values?.some(row => row[1] === 'conflict_id');
+  if (!hasRiskConflictId) {
+    db.run(`ALTER TABLE risk_annotations ADD COLUMN conflict_id INTEGER`);
+  }
+  const riskColNames = riskCols[0]?.values?.map(row => row[1]) || [];
+  if (riskColNames.includes('rule_id')) {
+    const ruleIdCol = riskCols[0]?.values?.find(row => row[1] === 'rule_id');
+    if (ruleIdCol && ruleIdCol[3] === 1) {
+      const hasRuleIdNotNull = true;
+    }
   }
 
   const negResultCols = db.exec("PRAGMA table_info(negotiation_results)");

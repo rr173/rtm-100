@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { initDb, queryAll, queryOne, runSql, saveDb } = require('./database');
-const { detectConflicts } = require('./conflictDetection');
+const { detectConflicts, deleteConflictDerivedRisks } = require('./conflictDetection');
 const { annotateRisks, getClauseRiskLevel } = require('./riskAnnotation');
 const { compareRevisions } = require('./textDiff');
 const { seed } = require('./seed');
@@ -113,13 +113,13 @@ async function startServer() {
       );
     }
 
-    const conflicts = detectConflicts(contractId);
-    const annotations = annotateRisks(contractId);
+    const conflictsResult = detectConflicts(contractId);
+    const risksResult = annotateRisks(contractId);
 
     res.json({
       contract_id: contractId,
-      conflicts_detected: conflicts.length,
-      risks_annotated: annotations.length
+      conflicts_detected: conflictsResult.conflicts.length,
+      risks_annotated: risksResult.annotations.length
     });
   });
 
@@ -159,6 +159,7 @@ async function startServer() {
 
     const result = conflicts.map(c => ({
       ...c,
+      risk_elevated: c.original_severity ? c.severity !== c.original_severity : false,
       review_action: actionMap[c.id] || null
     }));
 
@@ -171,7 +172,11 @@ async function startServer() {
       'SELECT * FROM risk_annotations WHERE contract_id = ? AND revision = ?',
       [req.params.id, revision]
     );
-    res.json(annotations);
+    const result = annotations.map(a => ({
+      ...a,
+      source: a.source || 'rule'
+    }));
+    res.json(result);
   });
 
   app.post('/api/contracts/:id/conflicts/:conflictId/resolve', (req, res) => {
@@ -196,6 +201,10 @@ async function startServer() {
       [req.params.conflictId]
     );
 
+    if (action === 'dismiss') {
+      deleteConflictDerivedRisks(parseInt(req.params.id), parseInt(req.params.conflictId), conflict.revision || 1);
+    }
+
     if (existing) {
       runSql(
         "UPDATE review_actions SET action = ?, reviewer = ?, note = ?, created_at = datetime('now') WHERE id = ?",
@@ -203,12 +212,11 @@ async function startServer() {
       );
       res.json({ id: existing.id, action, reviewer, note: note || '' });
     } else {
-      runSql(
+      const result = runSql(
         'INSERT INTO review_actions (conflict_id, action, reviewer, note) VALUES (?, ?, ?, ?)',
         [parseInt(req.params.conflictId), action, reviewer, note || '']
       );
-      const row = queryOne('SELECT last_insert_rowid() as id');
-      res.json({ id: row.id, action, reviewer, note: note || '' });
+      res.json({ id: result.lastInsertRowid, action, reviewer, note: note || '' });
     }
   });
 
@@ -252,12 +260,11 @@ async function startServer() {
       return res.status(400).json({ error: 'tag_a, tag_b, condition为必填项' });
     }
 
-    runSql(
+    const result = runSql(
       'INSERT INTO conflict_rules (tag_a, tag_b, condition) VALUES (?, ?, ?)',
       [tag_a, tag_b, condition]
     );
-    const row = queryOne('SELECT last_insert_rowid() as id');
-    res.json({ id: row.id, tag_a, tag_b, condition });
+    res.json({ id: result.lastInsertRowid, tag_a, tag_b, condition });
   });
 
   app.get('/api/rules/risks', (req, res) => {
@@ -274,12 +281,11 @@ async function startServer() {
       return res.status(400).json({ error: 'level必须是high/medium/low之一' });
     }
 
-    runSql(
+    const result = runSql(
       'INSERT INTO risk_rules (trigger_tags, condition, level, description) VALUES (?, ?, ?, ?)',
       [JSON.stringify(trigger_tags), condition, level, description]
     );
-    const row = queryOne('SELECT last_insert_rowid() as id');
-    res.json({ id: row.id, trigger_tags, condition, level, description });
+    res.json({ id: result.lastInsertRowid, trigger_tags, condition, level, description });
   });
 
   app.post('/api/contracts/:id/revisions', (req, res) => {
@@ -357,8 +363,8 @@ async function startServer() {
       tags: JSON.stringify(c.tags)
     }));
 
-    const conflicts = detectConflicts(contractId, newRevisionNumber, clausesForDetection);
-    const annotations = annotateRisks(contractId, newRevisionNumber, clausesForDetection);
+    const conflictsResult = detectConflicts(contractId, newRevisionNumber, clausesForDetection);
+    const risksResult = annotateRisks(contractId, newRevisionNumber, clausesForDetection);
 
     const newDeps = analyzeDependencies(contractId, newRevisionNumber, clausesForStorage);
     saveDependencies(newDeps);
@@ -390,8 +396,8 @@ async function startServer() {
     res.json({
       contract_id: contractId,
       revision_number: newRevisionNumber,
-      conflicts_detected: conflicts.length,
-      risks_annotated: annotations.length,
+      conflicts_detected: conflictsResult.conflicts.length,
+      risks_annotated: risksResult.annotations.length,
       dependencies_count: newDeps.length,
       affected_clauses: affectedClauses
     });
@@ -1001,16 +1007,16 @@ async function startServer() {
       );
     }
 
-    const conflicts = detectConflicts(contractId);
-    const annotations = annotateRisks(contractId);
+    const conflictsResult = detectConflicts(contractId);
+    const risksResult = annotateRisks(contractId);
     const complianceFindings = auditContract(contractId);
     const complianceViolations = complianceFindings.filter(f => f.status === 'violation');
 
     res.json({
       contract_id: contractId,
       clauses_count: generatedClauses.length,
-      conflicts_detected: conflicts.length,
-      risks_annotated: annotations.length,
+      conflicts_detected: conflictsResult.conflicts.length,
+      risks_annotated: risksResult.annotations.length,
       compliance_violations: complianceViolations.length,
       warnings: allWarnings
     });

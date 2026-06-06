@@ -3,6 +3,7 @@ import ConflictCard from './ConflictCard';
 
 const LEVEL_COLORS = { high: '#ef4444', medium: '#f59e0b', low: '#22c55e' };
 const LEVEL_LABELS = { high: '高风险', medium: '中风险', low: '低风险' };
+const SOURCE_LABELS = { rule: '规则命中', conflict: '冲突派生' };
 
 function highlightNumbers(text) {
   const parts = [];
@@ -55,6 +56,7 @@ export default function ClauseDetail({ clause, conflicts, risks, allClauses, con
                 <div className="risk-level" style={{ color: LEVEL_COLORS[risk.level] }}>
                   {LEVEL_LABELS[risk.level]}
                 </div>
+                <div className="risk-source-tag">{SOURCE_LABELS[risk.source || 'rule']}</div>
                 <div className="risk-reason">{risk.trigger_reason}</div>
               </div>
             ))}

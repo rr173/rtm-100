@@ -45,6 +45,7 @@ export default function ConflictCard({ conflict, allClauses, contractId, onResol
         <span className="conflict-type">{TYPE_LABELS[conflict.conflict_type]}</span>
         <span className="conflict-severity" style={{ color: SEVERITY_COLORS[conflict.severity] }}>
           {SEVERITY_LABELS[conflict.severity]}
+          {conflict.risk_elevated && <span className="risk-elevated-badge"> (因高风险升级)</span>}
         </span>
         {resolved && currentAction && (
           <span className={`review-badge review-${currentAction}`}>

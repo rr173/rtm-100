@@ -332,6 +332,16 @@ body {
   padding-top: 1px;
 }
 
+.risk-source-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #e0e7ff;
+  color: #3730a3;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 .risk-reason {
   font-size: 13px;
   color: #4b5563;
@@ -382,6 +392,16 @@ body {
 .conflict-severity {
   font-size: 13px;
   font-weight: 600;
+}
+
+.risk-elevated-badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: #7c2d12;
+  background: #fed7aa;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 4px;
 }
 
 .review-badge {
