@@ -884,14 +884,21 @@ async function startServer() {
       return res.status(400).json({ error: 'title和template_selections为必填项' });
     }
 
-    const generatedClauses = [];
-    const allWarnings = [];
-
+    const clauseIdSet = new Set();
     for (const selection of template_selections) {
       if (!selection.template_id || !selection.clause_id) {
         return res.status(400).json({ error: '每个template_selection必须包含template_id和clause_id' });
       }
+      if (clauseIdSet.has(selection.clause_id)) {
+        return res.status(400).json({ error: `clause_id"${selection.clause_id}"重复,条款编号必须唯一` });
+      }
+      clauseIdSet.add(selection.clause_id);
+    }
 
+    const generatedClauses = [];
+    const allWarnings = [];
+
+    for (const selection of template_selections) {
       const fillResult = fillTemplateById(selection.template_id, selection.params || {});
       if (fillResult.error) {
         return res.status(fillResult.status || 400).json({

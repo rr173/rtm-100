@@ -156,30 +156,6 @@ function detectConflicts(contractId, revision = 1, clausesInput = null) {
   const conflicts = [];
   const conflictPairs = new Set();
 
-  for (const clause of clauses) {
-    const tags = JSON.parse(clause.tags);
-    
-    for (const rule of conflictRules) {
-      const hasTagA = tags.includes(rule.tag_a);
-      const hasTagB = tags.includes(rule.tag_b);
-      
-      if (hasTagA && hasTagB) {
-        const pairKey = `${clause.clause_id}|${clause.clause_id}|${rule.tag_a}|${rule.tag_b}`;
-        if (!conflictPairs.has(pairKey)) {
-          conflictPairs.add(pairKey);
-          conflicts.push({
-            contract_id: contractId,
-            clause_a_id: clause.clause_id,
-            clause_b_id: clause.clause_id,
-            conflict_type: 'contradiction',
-            severity: 'critical',
-            reason: `条款"${clause.title}"同时包含"${rule.tag_a}"和"${rule.tag_b}"两种互斥约束,条款自身存在逻辑矛盾,需要审阅确认。`
-          });
-        }
-      }
-    }
-  }
-
   for (let i = 0; i < clauses.length; i++) {
     for (let j = i + 1; j < clauses.length; j++) {
       const a = clauses[i];

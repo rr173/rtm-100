@@ -193,31 +193,65 @@ function fillTemplateById(id, params) {
   };
 }
 
+function getConflictingTagPairs() {
+  const rules = queryAll('SELECT tag_a, tag_b FROM conflict_rules');
+  const pairs = new Set();
+  for (const r of rules) {
+    pairs.add(`${r.tag_a}|${r.tag_b}`);
+    pairs.add(`${r.tag_b}|${r.tag_a}`);
+  }
+  return pairs;
+}
+
+function isTagsConflicting(existingTagSet, candidateTags, conflictingPairs) {
+  for (const existingTag of existingTagSet) {
+    for (const candidateTag of candidateTags) {
+      if (conflictingPairs.has(`${existingTag}|${candidateTag}`)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function recommendTemplates(existingTags) {
   const existingTagSet = new Set(existingTags || []);
   const allTemplates = getTemplates();
   const recommendedTemplateIds = new Set();
   const recommendations = [];
+  const conflictingPairs = getConflictingTagPairs();
 
   for (const association of TAG_ASSOCIATION_MATRIX) {
-    if (existingTagSet.has(association.tag)) {
-      for (const associatedTag of association.associated) {
-        if (!existingTagSet.has(associatedTag)) {
-          const matchingTemplates = allTemplates.filter(t =>
-            t.auto_tags.includes(associatedTag) &&
-            !recommendedTemplateIds.has(t.id)
-          );
+    if (!existingTagSet.has(association.tag)) continue;
 
-          for (const tmpl of matchingTemplates) {
-            recommendedTemplateIds.add(tmpl.id);
-            recommendations.push({
-              template: tmpl,
-              reason: association.description,
-              trigger_tag: association.tag,
-              missing_tag: associatedTag
-            });
-          }
+    for (const associatedTag of association.associated) {
+      if (existingTagSet.has(associatedTag)) continue;
+
+      let directConflict = false;
+      for (const existingTag of existingTagSet) {
+        if (conflictingPairs.has(`${existingTag}|${associatedTag}`)) {
+          directConflict = true;
+          break;
         }
+      }
+
+      const matchingTemplates = allTemplates.filter(t => {
+        if (recommendedTemplateIds.has(t.id)) return false;
+        if (!t.auto_tags.includes(associatedTag)) return false;
+        if (directConflict) {
+          return !isTagsConflicting(existingTagSet, t.auto_tags, conflictingPairs);
+        }
+        return true;
+      });
+
+      for (const tmpl of matchingTemplates) {
+        recommendedTemplateIds.add(tmpl.id);
+        recommendations.push({
+          template: tmpl,
+          reason: association.description,
+          trigger_tag: association.tag,
+          missing_tag: associatedTag
+        });
       }
     }
   }
