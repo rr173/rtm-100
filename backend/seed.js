@@ -8,6 +8,7 @@ const { seedExecutionPlan } = require('./executionTracker');
 const { seedDemoCostModels } = require('./costEngine');
 const { seedDefaultTemplate, seedDemoWorkflow } = require('./workflowEngine');
 const { buildIndex } = require('./searchEngine');
+const { generateFingerprint } = require('./semanticFingerprint');
 
 function seed() {
   seedDemoTemplates();
@@ -27,6 +28,21 @@ function seed() {
       console.log('Search index not found, building index for existing contracts...');
       const idxResult = buildIndex();
       console.log(`Search index built: ${idxResult.indexed_clauses_count} clauses, ${idxResult.total_terms} terms.`);
+    }
+
+    const existingContracts = queryAll('SELECT id FROM contracts');
+    for (const c of existingContracts) {
+      const fpCount = queryOne(
+        'SELECT COUNT(*) as cnt FROM semantic_triples WHERE contract_id = ? AND revision = 1',
+        [c.id]
+      );
+      if (!fpCount || fpCount.cnt === 0) {
+        console.log(`Generating semantic fingerprint for existing contract id=${c.id} revision=1...`);
+        const fpResult = generateFingerprint(c.id, 1);
+        if (!fpResult.error) {
+          console.log(`  Fingerprint generated: ${fpResult.clauses_processed} clauses, ${fpResult.total_triples} triples.`);
+        }
+      }
     }
     return;
   }
@@ -168,6 +184,12 @@ function seed() {
 
   const idxResult = buildIndex();
   console.log(`Search index built: ${idxResult.indexed_clauses_count} clauses, ${idxResult.total_terms} terms.`);
+
+  console.log('Generating semantic fingerprint for demo contract revision=1...');
+  const fpResult = generateFingerprint(contractId, 1);
+  if (!fpResult.error) {
+    console.log(`Semantic fingerprint generated: ${fpResult.clauses_processed} clauses, ${fpResult.total_triples} triples.`);
+  }
 
   console.log('Demo data seeded successfully.');
 }

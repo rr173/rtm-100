@@ -305,6 +305,21 @@ async function initDb() {
     );
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS semantic_triples (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1,
+      clause_id TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      action TEXT NOT NULL,
+      object TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+      UNIQUE(contract_id, revision, clause_id, subject, action, object)
+    );
+  `);
+
   const conflictCols = db.exec("PRAGMA table_info(detected_conflicts)");
   const hasConflictRevision = conflictCols[0]?.values?.some(row => row[1] === 'revision');
   if (!hasConflictRevision) {

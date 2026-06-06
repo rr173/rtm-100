@@ -76,6 +76,11 @@ const {
   searchSimilar,
   detectPlagiarism
 } = require('./searchEngine');
+const {
+  generateFingerprint,
+  semanticDiff,
+  getEvolutionChain
+} = require('./semanticFingerprint');
 
 const app = express();
 app.use(cors());
@@ -1310,6 +1315,55 @@ async function startServer() {
         parseInt(contract_id),
         threshold !== undefined ? parseFloat(threshold) : 0.7
       );
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/contracts/:id/fingerprint', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const revision = req.body?.revision ? parseInt(req.body.revision) : undefined;
+
+    try {
+      const result = generateFingerprint(contractId, revision);
+      if (result.error) {
+        return res.status(result.status || 400).json({ error: result.error });
+      }
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/contracts/:id/semantic-diff', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const { from_revision, to_revision } = req.body;
+
+    try {
+      const result = semanticDiff(
+        contractId,
+        from_revision !== undefined ? parseInt(from_revision) : undefined,
+        to_revision !== undefined ? parseInt(to_revision) : undefined
+      );
+      if (result.error) {
+        return res.status(result.status || 400).json({ error: result.error });
+      }
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/contracts/:id/evolution', (req, res) => {
+    const contractId = parseInt(req.params.id);
+    const clauseId = req.query.clause_id;
+
+    try {
+      const result = getEvolutionChain(contractId, clauseId);
+      if (result.error) {
+        return res.status(result.status || 400).json({ error: result.error });
+      }
       res.json(result);
     } catch (err) {
       res.status(400).json({ error: err.message });
