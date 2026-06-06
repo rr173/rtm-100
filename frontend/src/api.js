@@ -113,3 +113,17 @@ export async function fetchImpact(contractId, clauseId, revision) {
   const res = await fetch(`${API_BASE}/contracts/${contractId}/impact?clause_id=${clauseId}&revision=${revision}`);
   return res.json();
 }
+
+export async function scanCrossContractConflicts(contractIds, revision = 1) {
+  const res = await fetch(`${API_BASE}/cross-contract/scan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contract_ids: contractIds, revision })
+  });
+  return res.json();
+}
+
+export async function fetchCrossContractScanResult(batchId) {
+  const res = await fetch(`${API_BASE}/cross-contract/scan/${batchId}`);
+  return res.json();
+}

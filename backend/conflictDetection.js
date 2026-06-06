@@ -347,4 +347,4 @@ function deleteConflictDerivedRisks(contractId, conflictId, revision) {
   );
 }
 
-module.exports = { extractQuantities, detectConflicts, deleteConflictDerivedRisks, createConflictDerivedRisk, SEVERITY_TO_RISK_LEVEL, getLowerPriorityClause };
+module.exports = { extractQuantities, detectConflicts, deleteConflictDerivedRisks, createConflictDerivedRisk, SEVERITY_TO_RISK_LEVEL, getLowerPriorityClause, detectSameTagConflict, detectContradiction, extractBounds };

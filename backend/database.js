@@ -78,12 +78,14 @@ async function initDb() {
       clause_id TEXT NOT NULL,
       rule_id INTEGER,
       conflict_id INTEGER,
+      cross_conflict_id INTEGER,
       level TEXT NOT NULL CHECK(level IN ('high','medium','low')),
       trigger_reason TEXT NOT NULL,
-      source TEXT NOT NULL DEFAULT 'rule' CHECK(source IN ('rule','conflict')),
+      source TEXT NOT NULL DEFAULT 'rule' CHECK(source IN ('rule','conflict','cross_contract')),
       FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
       FOREIGN KEY (rule_id) REFERENCES risk_rules(id) ON DELETE CASCADE,
-      FOREIGN KEY (conflict_id) REFERENCES detected_conflicts(id) ON DELETE CASCADE
+      FOREIGN KEY (conflict_id) REFERENCES detected_conflicts(id) ON DELETE CASCADE,
+      FOREIGN KEY (cross_conflict_id) REFERENCES cross_contract_conflicts(id) ON DELETE CASCADE
     );
   `);
 
@@ -324,6 +326,25 @@ async function initDb() {
     );
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS cross_contract_conflicts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_a_id INTEGER NOT NULL,
+      contract_b_id INTEGER NOT NULL,
+      clause_a_id TEXT NOT NULL,
+      clause_b_id TEXT NOT NULL,
+      conflict_type TEXT NOT NULL CHECK(conflict_type IN ('contradiction','ambiguity','overlap','exclusivity_violation')),
+      severity TEXT NOT NULL CHECK(severity IN ('critical','warning')),
+      original_severity TEXT CHECK(original_severity IN ('critical','warning')),
+      risk_propagated INTEGER NOT NULL DEFAULT 0,
+      reason TEXT NOT NULL,
+      scan_batch TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (contract_a_id) REFERENCES contracts(id) ON DELETE CASCADE,
+      FOREIGN KEY (contract_b_id) REFERENCES contracts(id) ON DELETE CASCADE
+    );
+  `);
+
   const conflictCols = db.exec("PRAGMA table_info(detected_conflicts)");
   const hasConflictRevision = conflictCols[0]?.values?.some(row => row[1] === 'revision');
   if (!hasConflictRevision) {
@@ -341,11 +362,15 @@ async function initDb() {
   }
   const hasRiskSource = riskCols[0]?.values?.some(row => row[1] === 'source');
   if (!hasRiskSource) {
-    db.run(`ALTER TABLE risk_annotations ADD COLUMN source TEXT NOT NULL DEFAULT 'rule' CHECK(source IN ('rule','conflict'))`);
+    db.run(`ALTER TABLE risk_annotations ADD COLUMN source TEXT NOT NULL DEFAULT 'rule'`);
   }
   const hasRiskConflictId = riskCols[0]?.values?.some(row => row[1] === 'conflict_id');
   if (!hasRiskConflictId) {
     db.run(`ALTER TABLE risk_annotations ADD COLUMN conflict_id INTEGER`);
+  }
+  const hasRiskCrossConflictId = riskCols[0]?.values?.some(row => row[1] === 'cross_conflict_id');
+  if (!hasRiskCrossConflictId) {
+    db.run(`ALTER TABLE risk_annotations ADD COLUMN cross_conflict_id INTEGER`);
   }
   const riskColNames = riskCols[0]?.values?.map(row => row[1]) || [];
   if (riskColNames.includes('rule_id')) {

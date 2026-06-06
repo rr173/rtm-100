@@ -9,6 +9,7 @@ import ClauseDetail from './components/ClauseDetail';
 import RevisionDiffView from './components/RevisionDiffView';
 import UploadRevisionModal from './components/UploadRevisionModal';
 import DependencyGraph from './components/DependencyGraph';
+import CrossContractScanView from './components/CrossContractScanView';
 
 export default function App() {
   const [contracts, setContracts] = useState([]);
@@ -138,17 +139,19 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <h1>合同条款冲突检测与风险标注</h1>
-        <div className="contract-selector">
-          <label>选择合同: </label>
-          <select
-            value={selectedContractId || ''}
-            onChange={e => setSelectedContractId(parseInt(e.target.value))}
-          >
-            {contracts.map(c => (
-              <option key={c.id} value={c.id}>{c.title}</option>
-            ))}
-          </select>
-        </div>
+        {viewMode !== 'cross' && (
+          <div className="contract-selector">
+            <label>选择合同: </label>
+            <select
+              value={selectedContractId || ''}
+              onChange={e => setSelectedContractId(parseInt(e.target.value))}
+            >
+              {contracts.map(c => (
+                <option key={c.id} value={c.id}>{c.title}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="view-toggle">
           <div className="view-buttons">
             <button
@@ -169,6 +172,12 @@ export default function App() {
               onClick={() => setViewMode('graph')}
             >
               依赖图谱
+            </button>
+            <button
+              className={`view-btn ${viewMode === 'cross' ? 'active' : ''}`}
+              onClick={() => setViewMode('cross')}
+            >
+              跨合同扫描
             </button>
           </div>
           {viewMode === 'diff' && revisions.length >= 2 && (
@@ -280,6 +289,10 @@ export default function App() {
             />
           )}
         </div>
+      )}
+
+      {viewMode === 'cross' && (
+        <CrossContractScanView contracts={contracts} />
       )}
 
       <UploadRevisionModal

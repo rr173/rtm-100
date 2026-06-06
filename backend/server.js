@@ -83,6 +83,10 @@ const {
   semanticDiff,
   getEvolutionChain
 } = require('./semanticFingerprint');
+const {
+  scanCrossContractConflicts,
+  getCrossContractScanResult
+} = require('./crossContractConflict');
 
 const app = express();
 app.use(cors());
@@ -1394,6 +1398,27 @@ async function startServer() {
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
+  });
+
+  app.post('/api/cross-contract/scan', (req, res) => {
+    const { contract_ids, revision } = req.body;
+    if (!Array.isArray(contract_ids) || contract_ids.length < 2) {
+      return res.status(400).json({ error: 'contract_ids为必填数组,至少包含2份合同ID' });
+    }
+
+    const result = scanCrossContractConflicts(contract_ids, parseInt(revision || '1'));
+    if (result.error) {
+      return res.status(result.status || 400).json({ error: result.error });
+    }
+    res.json(result);
+  });
+
+  app.get('/api/cross-contract/scan/:batchId', (req, res) => {
+    const result = getCrossContractScanResult(req.params.batchId);
+    if (result.error) {
+      return res.status(result.status || 400).json({ error: result.error });
+    }
+    res.json(result);
   });
 
   const PORT = process.env.PORT || 3001;
