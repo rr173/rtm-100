@@ -1,4 +1,4 @@
-const { queryAll, queryOne } = require('./database');
+const { queryAll, queryOne, runSql } = require('./database');
 const { getDependencies } = require('./clauseDependency');
 
 const DIMENSION_WEIGHTS = {
@@ -372,9 +372,183 @@ function runBatchHealthCheck(contractIds, revision = 1) {
   };
 }
 
+function saveHealthCheckSnapshot(contractId, revision, report) {
+  runSql(
+    `INSERT INTO health_check_history 
+     (contract_id, revision, total_score, grade, conflict_score, risk_score, compliance_score, execution_score, dependency_score, snapshot_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      contractId,
+      revision,
+      report.total_score,
+      report.grade,
+      report.dimensions.conflict.score,
+      report.dimensions.risk.score,
+      report.dimensions.compliance.score,
+      report.dimensions.execution.score,
+      report.dimensions.dependency.score,
+      JSON.stringify(report)
+    ]
+  );
+}
+
+function getLastHealthCheck(contractId) {
+  return queryOne(
+    `SELECT * FROM health_check_history 
+     WHERE contract_id = ? 
+     ORDER BY checked_at DESC, id DESC 
+     LIMIT 1`,
+    [contractId]
+  );
+}
+
+function detectDegradation(contractId, currentReport) {
+  const lastCheck = getLastHealthCheck(contractId);
+  if (!lastCheck) return null;
+
+  const scoreDrop = lastCheck.total_score - currentReport.total_score;
+  if (scoreDrop <= 10) return null;
+
+  const currentDims = {
+    conflict: currentReport.dimensions.conflict.score,
+    risk: currentReport.dimensions.risk.score,
+    compliance: currentReport.dimensions.compliance.score,
+    execution: currentReport.dimensions.execution.score,
+    dependency: currentReport.dimensions.dependency.score
+  };
+
+  const lastDims = {
+    conflict: lastCheck.conflict_score,
+    risk: lastCheck.risk_score,
+    compliance: lastCheck.compliance_score,
+    execution: lastCheck.execution_score,
+    dependency: lastCheck.dependency_score
+  };
+
+  let biggestDrop = 0;
+  let worstDimension = null;
+  const dimensionChanges = {};
+
+  for (const [key, currentScore] of Object.entries(currentDims)) {
+    const drop = lastDims[key] - currentScore;
+    dimensionChanges[key] = {
+      previous: lastDims[key],
+      current: currentScore,
+      drop: Math.round(drop * 10) / 10
+    };
+    if (drop > biggestDrop) {
+      biggestDrop = drop;
+      worstDimension = key;
+    }
+  }
+
+  return {
+    alert: '急剧恶化',
+    total_score_drop: Math.round(scoreDrop * 10) / 10,
+    previous_total_score: lastCheck.total_score,
+    previous_grade: lastCheck.grade,
+    previous_checked_at: lastCheck.checked_at,
+    worst_dimension: worstDimension ? {
+      key: worstDimension,
+      label: DIMENSION_LABELS[worstDimension],
+      drop: Math.round(biggestDrop * 10) / 10,
+      previous: lastDims[worstDimension],
+      current: currentDims[worstDimension]
+    } : null,
+    dimension_changes: dimensionChanges
+  };
+}
+
+function getHealthCheckHistory(contractId) {
+  const contract = queryOne('SELECT * FROM contracts WHERE id = ?', [contractId]);
+  if (!contract) {
+    const err = new Error('合同不存在');
+    err.status = 404;
+    throw err;
+  }
+
+  const history = queryAll(
+    `SELECT id, contract_id, revision, total_score, grade, 
+            conflict_score, risk_score, compliance_score, execution_score, dependency_score, 
+            checked_at, snapshot_json
+     FROM health_check_history 
+     WHERE contract_id = ? 
+     ORDER BY checked_at ASC, id ASC`,
+    [contractId]
+  );
+
+  return history.map(h => ({
+    id: h.id,
+    contract_id: h.contract_id,
+    revision: h.revision,
+    total_score: h.total_score,
+    grade: h.grade,
+    dimensions: {
+      conflict: { score: h.conflict_score, label: DIMENSION_LABELS.conflict },
+      risk: { score: h.risk_score, label: DIMENSION_LABELS.risk },
+      compliance: { score: h.compliance_score, label: DIMENSION_LABELS.compliance },
+      execution: { score: h.execution_score, label: DIMENSION_LABELS.execution },
+      dependency: { score: h.dependency_score, label: DIMENSION_LABELS.dependency }
+    },
+    checked_at: h.checked_at,
+    snapshot: h.snapshot_json ? JSON.parse(h.snapshot_json) : null
+  }));
+}
+
+function runHealthCheckWithHistory(contractId, revision = 1) {
+  const report = runHealthCheck(contractId, revision);
+  const degradation = detectDegradation(contractId, report);
+  saveHealthCheckSnapshot(contractId, revision, report);
+
+  if (degradation) {
+    report.degradation_alert = degradation;
+  }
+
+  return report;
+}
+
+function runBatchHealthCheckWithHistory(contractIds, revision = 1) {
+  if (!Array.isArray(contractIds) || contractIds.length === 0) {
+    const err = new Error('contract_ids为必填数组');
+    err.status = 400;
+    throw err;
+  }
+
+  const results = [];
+  const errors = [];
+
+  for (const id of contractIds) {
+    try {
+      const report = runHealthCheckWithHistory(id, revision);
+      results.push(report);
+    } catch (err) {
+      errors.push({
+        contract_id: id,
+        error: err.message
+      });
+    }
+  }
+
+  results.sort((a, b) => a.total_score - b.total_score);
+
+  return {
+    total_contracts: contractIds.length,
+    successful: results.length,
+    failed: errors.length,
+    reports: results,
+    errors
+  };
+}
+
 module.exports = {
   runHealthCheck,
+  runHealthCheckWithHistory,
   runBatchHealthCheck,
+  runBatchHealthCheckWithHistory,
+  getHealthCheckHistory,
+  saveHealthCheckSnapshot,
+  detectDegradation,
+  getLastHealthCheck,
   scoreConflicts,
   scoreRisks,
   scoreCompliance,

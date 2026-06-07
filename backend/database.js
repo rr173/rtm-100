@@ -345,6 +345,24 @@ async function initDb() {
     );
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS health_check_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      contract_id INTEGER NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1,
+      total_score REAL NOT NULL,
+      grade TEXT NOT NULL,
+      conflict_score REAL NOT NULL,
+      risk_score REAL NOT NULL,
+      compliance_score REAL NOT NULL,
+      execution_score REAL NOT NULL,
+      dependency_score REAL NOT NULL,
+      snapshot_json TEXT,
+      checked_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE
+    );
+  `);
+
   const conflictCols = db.exec("PRAGMA table_info(detected_conflicts)");
   const hasConflictRevision = conflictCols[0]?.values?.some(row => row[1] === 'revision');
   if (!hasConflictRevision) {

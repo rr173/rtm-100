@@ -127,3 +127,22 @@ export async function fetchCrossContractScanResult(batchId) {
   const res = await fetch(`${API_BASE}/cross-contract/scan/${batchId}`);
   return res.json();
 }
+
+export async function runHealthCheck(contractId, revision = 1) {
+  const res = await fetch(`${API_BASE}/contracts/${contractId}/health-check?revision=${revision}`);
+  return res.json();
+}
+
+export async function runBatchHealthCheck(contractIds, revision = 1) {
+  const res = await fetch(`${API_BASE}/contracts/health-check/batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contract_ids: contractIds, revision })
+  });
+  return res.json();
+}
+
+export async function fetchHealthCheckHistory(contractId) {
+  const res = await fetch(`${API_BASE}/contracts/${contractId}/health-check/history`);
+  return res.json();
+}

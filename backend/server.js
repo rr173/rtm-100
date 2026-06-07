@@ -89,7 +89,9 @@ const {
 } = require('./crossContractConflict');
 const {
   runHealthCheck,
-  runBatchHealthCheck
+  runHealthCheckWithHistory,
+  runBatchHealthCheckWithHistory,
+  getHealthCheckHistory
 } = require('./healthCheck');
 
 const app = express();
@@ -1430,8 +1432,23 @@ async function startServer() {
     const revision = parseInt(req.query.revision || '1');
 
     try {
-      const report = runHealthCheck(contractId, revision);
+      const report = runHealthCheckWithHistory(contractId, revision);
       res.json(report);
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/contracts/:id/health-check/history', (req, res) => {
+    const contractId = parseInt(req.params.id);
+
+    try {
+      const history = getHealthCheckHistory(contractId);
+      res.json({
+        contract_id: contractId,
+        history_count: history.length,
+        history
+      });
     } catch (err) {
       res.status(err.status || 400).json({ error: err.message });
     }
@@ -1441,7 +1458,7 @@ async function startServer() {
     const { contract_ids, revision } = req.body;
 
     try {
-      const result = runBatchHealthCheck(contract_ids, parseInt(revision || '1'));
+      const result = runBatchHealthCheckWithHistory(contract_ids, parseInt(revision || '1'));
       res.json(result);
     } catch (err) {
       res.status(err.status || 400).json({ error: err.message });
