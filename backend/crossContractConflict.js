@@ -293,7 +293,7 @@ function scanCrossContractConflicts(contractIds, revision = 1) {
   const batchId = generateBatchId();
 
   runSql(`DELETE FROM cross_contract_conflicts WHERE scan_batch = ?`, [batchId]);
-  runSql(`DELETE FROM risk_annotations WHERE source = ?`, ['cross_contract']);
+  runSql(`DELETE FROM risk_annotations WHERE source = ? AND scan_batch = ?`, ['cross_contract', batchId]);
 
   const inserted = [];
   for (const c of conflicts) {
@@ -316,14 +316,15 @@ function scanCrossContractConflicts(contractIds, revision = 1) {
         const riskLevel = SEVERITY_TO_RISK_LEVEL[insertedConflict.severity] || 'high';
         const triggerReason = `跨合同风险传播: 合同"${contractMap[insertedConflict.contract_a_id].title}"的条款"${insertedConflict.clause_a_title}"已被标注为高风险,其与合同"${contractMap[insertedConflict.contract_b_id].title}"的条款"${insertedConflict.clause_b_title}"存在${insertedConflict.conflict_type === 'contradiction' ? '矛盾' : insertedConflict.conflict_type === 'exclusivity_violation' ? '独家违约' : '歧义/重叠'}冲突(冲突ID=${insertedConflict.id}),因此关联条款风险升级。`;
         const riskResult = runSql(
-          `INSERT INTO risk_annotations (contract_id, clause_id, rule_id, conflict_id, cross_conflict_id, level, trigger_reason, source, revision) VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
-          [insertedConflict.contract_b_id, insertedConflict.clause_b_id, insertedConflict.id, riskLevel, triggerReason, 'cross_contract', revision]
+          `INSERT INTO risk_annotations (contract_id, clause_id, rule_id, conflict_id, cross_conflict_id, level, trigger_reason, source, revision, scan_batch) VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
+          [insertedConflict.contract_b_id, insertedConflict.clause_b_id, insertedConflict.id, riskLevel, triggerReason, 'cross_contract', revision, batchId]
         );
         propagatedRisks.push({
           id: riskResult.lastInsertRowid,
           contract_id: insertedConflict.contract_b_id,
           clause_id: insertedConflict.clause_b_id,
           clause_title: insertedConflict.clause_b_title,
+          contract_title: contractMap[insertedConflict.contract_b_id].title,
           level: riskLevel,
           source: 'cross_contract',
           cross_conflict_id: insertedConflict.id,
@@ -335,14 +336,15 @@ function scanCrossContractConflicts(contractIds, revision = 1) {
         const riskLevel = SEVERITY_TO_RISK_LEVEL[insertedConflict.severity] || 'high';
         const triggerReason = `跨合同风险传播: 合同"${contractMap[insertedConflict.contract_b_id].title}"的条款"${insertedConflict.clause_b_title}"已被标注为高风险,其与合同"${contractMap[insertedConflict.contract_a_id].title}"的条款"${insertedConflict.clause_a_title}"存在${insertedConflict.conflict_type === 'contradiction' ? '矛盾' : insertedConflict.conflict_type === 'exclusivity_violation' ? '独家违约' : '歧义/重叠'}冲突(冲突ID=${insertedConflict.id}),因此关联条款风险升级。`;
         const riskResult = runSql(
-          `INSERT INTO risk_annotations (contract_id, clause_id, rule_id, conflict_id, cross_conflict_id, level, trigger_reason, source, revision) VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?)`,
-          [insertedConflict.contract_a_id, insertedConflict.clause_a_id, insertedConflict.id, riskLevel, triggerReason, 'cross_contract', revision]
+          `INSERT INTO risk_annotations (contract_id, clause_id, rule_id, conflict_id, cross_conflict_id, level, trigger_reason, source, revision, scan_batch) VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
+          [insertedConflict.contract_a_id, insertedConflict.clause_a_id, insertedConflict.id, riskLevel, triggerReason, 'cross_contract', revision, batchId]
         );
         propagatedRisks.push({
           id: riskResult.lastInsertRowid,
           contract_id: insertedConflict.contract_a_id,
           clause_id: insertedConflict.clause_a_id,
           clause_title: insertedConflict.clause_a_title,
+          contract_title: contractMap[insertedConflict.contract_a_id].title,
           level: riskLevel,
           source: 'cross_contract',
           cross_conflict_id: insertedConflict.id,
@@ -409,7 +411,17 @@ function getCrossContractScanResult(batchId) {
   }
 
   const conflicts = queryAll(
-    'SELECT * FROM cross_contract_conflicts WHERE scan_batch = ? ORDER BY severity DESC, id ASC',
+    `SELECT cc.*, 
+            ca.title AS clause_a_title, 
+            cb.title AS clause_b_title,
+            cta.title AS contract_a_title,
+            ctb.title AS contract_b_title
+     FROM cross_contract_conflicts cc
+     LEFT JOIN clauses ca ON ca.contract_id = cc.contract_a_id AND ca.clause_id = cc.clause_a_id
+     LEFT JOIN clauses cb ON cb.contract_id = cc.contract_b_id AND cb.clause_id = cc.clause_b_id
+     LEFT JOIN contracts cta ON cta.id = cc.contract_a_id
+     LEFT JOIN contracts ctb ON ctb.id = cc.contract_b_id
+     WHERE cc.scan_batch = ? ORDER BY cc.severity DESC, cc.id ASC`,
     [batchId]
   );
 
@@ -458,8 +470,14 @@ function getCrossContractScanResult(batchId) {
   }
 
   const propagatedRisks = queryAll(
-    `SELECT * FROM risk_annotations WHERE source = ?`,
-    ['cross_contract']
+    `SELECT ra.*, 
+            c.title AS clause_title,
+            ct.title AS contract_title
+     FROM risk_annotations ra
+     LEFT JOIN clauses c ON c.contract_id = ra.contract_id AND c.clause_id = ra.clause_id
+     LEFT JOIN contracts ct ON ct.id = ra.contract_id
+     WHERE ra.source = ? AND ra.scan_batch = ?`,
+    ['cross_contract', batchId]
   );
 
   return {

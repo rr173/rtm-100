@@ -372,11 +372,53 @@ async function initDb() {
   if (!hasRiskCrossConflictId) {
     db.run(`ALTER TABLE risk_annotations ADD COLUMN cross_conflict_id INTEGER`);
   }
+  const hasRiskScanBatch = riskCols[0]?.values?.some(row => row[1] === 'scan_batch');
+  if (!hasRiskScanBatch) {
+    db.run(`ALTER TABLE risk_annotations ADD COLUMN scan_batch TEXT`);
+  }
   const riskColNames = riskCols[0]?.values?.map(row => row[1]) || [];
   if (riskColNames.includes('rule_id')) {
     const ruleIdCol = riskCols[0]?.values?.find(row => row[1] === 'rule_id');
     if (ruleIdCol && ruleIdCol[3] === 1) {
       const hasRuleIdNotNull = true;
+    }
+  }
+  const riskTableSql = db.exec("SELECT sql FROM sqlite_master WHERE type='table' AND name='risk_annotations'");
+  const oldRiskCreateSql = riskTableSql[0]?.values?.[0]?.[0] || '';
+  const sourceCheckMissingCrossContract =
+    oldRiskCreateSql.includes("CHECK(source IN") &&
+    !oldRiskCreateSql.includes("'cross_contract'");
+  if (sourceCheckMissingCrossContract) {
+    try {
+      db.run("PRAGMA foreign_keys = OFF");
+      db.run(`
+        CREATE TABLE IF NOT EXISTS risk_annotations_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          contract_id INTEGER NOT NULL,
+          clause_id TEXT NOT NULL,
+          rule_id INTEGER,
+          conflict_id INTEGER,
+          cross_conflict_id INTEGER,
+          level TEXT NOT NULL CHECK(level IN ('high','medium','low')),
+          trigger_reason TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'rule' CHECK(source IN ('rule','conflict','cross_contract')),
+          revision INTEGER DEFAULT 1,
+          scan_batch TEXT,
+          FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+          FOREIGN KEY (rule_id) REFERENCES risk_rules(id) ON DELETE CASCADE,
+          FOREIGN KEY (conflict_id) REFERENCES detected_conflicts(id) ON DELETE CASCADE,
+          FOREIGN KEY (cross_conflict_id) REFERENCES cross_contract_conflicts(id) ON DELETE CASCADE
+        );
+      `);
+      const existingCols = riskColNames.filter(c =>
+        ['id','contract_id','clause_id','rule_id','conflict_id','cross_conflict_id','level','trigger_reason','source','revision','scan_batch'].includes(c)
+      );
+      db.run(`INSERT INTO risk_annotations_new (${existingCols.join(',')}) SELECT ${existingCols.join(',')} FROM risk_annotations`);
+      db.run("DROP TABLE risk_annotations");
+      db.run("ALTER TABLE risk_annotations_new RENAME TO risk_annotations");
+      db.run("PRAGMA foreign_keys = ON");
+    } catch (e) {
+      console.warn("迁移 risk_annotations 表 CHECK 约束失败，可尝试删除 contracts.db 后重新初始化:", e.message);
     }
   }
 
